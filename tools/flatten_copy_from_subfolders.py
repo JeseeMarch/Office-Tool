@@ -1,5 +1,7 @@
 import os
 import shutil
+import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog
 def copy_specific_files(source_dir, target_dir, file_extension):
     print(f"正在检查源目录: {source_dir}") # 调试信息
     if not os.path.exists(source_dir):
@@ -51,12 +53,28 @@ def copy_specific_files(source_dir, target_dir, file_extension):
                 shutil.copy2(source_file_path, target_file_path)
                 print(f"复制文件: {source_file_path} 到 {target_file_path}")
 
-# 示例用法
+def run_flatten_copy():
+    root = tk.Tk()
+    root.withdraw()
+
+    source_directory = filedialog.askdirectory(title="选择源目录")
+    if not source_directory:
+        return
+
+    target_directory = filedialog.askdirectory(title="选择目标目录")
+    if not target_directory:
+        return
+
+    file_ext = simpledialog.askstring("文件类型", "请输入要复制的扩展名，例如 .pdf：", initialvalue=".pdf")
+    if not file_ext:
+        return
+
+    try:
+        copy_specific_files(source_directory, target_directory, file_ext)
+        messagebox.showinfo("完成", "文件扁平复制完成。")
+    except Exception as exc:
+        messagebox.showerror("复制失败", str(exc))
 
 
-
-source_directory = r'D:\Pharmacy'
-target_directory = r'D:\a'
-file_ext = '.pdf'  # 指定文件类型，例如 '.txt'
-
-copy_specific_files(source_directory, target_directory, file_ext)
+if __name__ == "__main__":
+    run_flatten_copy()

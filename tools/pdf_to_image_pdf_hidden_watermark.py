@@ -106,6 +106,11 @@ def select_files_and_watermark():
     
     messagebox.showinfo("完成", "所有文件处理完成！")
 
+
+def run_pdf_hidden_watermark():
+    select_files_and_watermark()
+
+
 # 运行程序
 if __name__ == "__main__":
     select_files_and_watermark()

@@ -1,5 +1,7 @@
 import os
 import re
+from tkinter import Tk, filedialog, messagebox, simpledialog
+
 from docx import Document
 
 def replace_text_in_paragraph(paragraph, old_text, new_text):
@@ -108,8 +110,28 @@ def search_and_replace(root_folder, old_text, new_text):
                 except Exception as e:
                     print(f"处理 {docx_file} 失败: {e}")
 
-root_folder = r'D:\OneDrive\3. Business\3.1 产品文件\2.4 产品文件\3.1 铜肽\3.1 铜肽 粉末 EN'  # 你的路径
-old_text = 'Building B5, 1st Floor, 16 Haichuan Road,'
-new_text = '1st Floor, Building B5, No.16 Haichuan Road,'
+def run_batch_replace():
+    root = Tk()
+    root.withdraw()
 
-search_and_replace(root_folder, old_text, new_text)
+    root_folder = filedialog.askdirectory(title="选择要批量替换的 Word 文件夹")
+    if not root_folder:
+        return
+
+    old_text = simpledialog.askstring("查找文本", "请输入要替换的原文本：")
+    if old_text is None:
+        return
+
+    new_text = simpledialog.askstring("替换为", "请输入新文本：")
+    if new_text is None:
+        return
+
+    try:
+        search_and_replace(root_folder, old_text, new_text)
+        messagebox.showinfo("完成", "Word 内容批量替换完成。")
+    except Exception as exc:
+        messagebox.showerror("替换失败", str(exc))
+
+
+if __name__ == "__main__":
+    run_batch_replace()

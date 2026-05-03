@@ -12,6 +12,7 @@ Requires: pip install python-docx
 import argparse
 import sys
 from pathlib import Path
+from tkinter import Tk, filedialog, messagebox
 
 from docx import Document
 from docx.shared import Pt
@@ -104,6 +105,32 @@ def main() -> int:
 
     print(f"Wrote {len(entries)} entries to {output_path}")
     return 0
+
+
+def run_directory_listing_gui() -> None:
+    root = Tk()
+    root.withdraw()
+
+    folder = filedialog.askdirectory(title="选择要导出的目录")
+    if not folder:
+        return
+
+    output_path = filedialog.asksaveasfilename(
+        title="保存目录清单",
+        defaultextension=".docx",
+        initialfile="directory_listing.docx",
+        filetypes=[("Word 文档", "*.docx")],
+    )
+    if not output_path:
+        return
+
+    try:
+        root_path = Path(folder).resolve()
+        entries = walk_tree(root_path)
+        create_document(root_path, entries, Path(output_path).resolve())
+        messagebox.showinfo("完成", f"已导出 {len(entries)} 条目录记录。")
+    except Exception as exc:
+        messagebox.showerror("导出失败", str(exc))
 
 
 if __name__ == "__main__":

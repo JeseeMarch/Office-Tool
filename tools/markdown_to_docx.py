@@ -63,11 +63,16 @@ def markdown_to_word(input_file, output_file):
     except Exception as e:
         print(f"❌ 转换失败: {str(e)}")
 
-if __name__ == "__main__":
+def run_markdown_to_docx():
     input_md = select_markdown_file()
-    if input_md:
-        base_name = os.path.splitext(os.path.basename(input_md))[0]
-        output_docx = os.path.join(os.path.dirname(input_md), base_name + ".docx")
-        markdown_to_word(input_md, output_docx)
-    else:
-        print("⚠️ 未选择文件，程序已退出。")
+    if not input_md:
+        print("未选择文件，程序已退出。")
+        return
+
+    base_name = os.path.splitext(os.path.basename(input_md))[0]
+    output_docx = os.path.join(os.path.dirname(input_md), base_name + ".docx")
+    markdown_to_word(input_md, output_docx)
+
+
+if __name__ == "__main__":
+    run_markdown_to_docx()

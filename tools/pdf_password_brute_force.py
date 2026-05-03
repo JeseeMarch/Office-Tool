@@ -1,4 +1,6 @@
 import itertools
+from tkinter import Tk, filedialog, messagebox, simpledialog
+
 import PyPDF2
 
 def brute_force_pdf_password(pdf_path, max_length=4):
@@ -35,6 +37,33 @@ def brute_force_pdf_password(pdf_path, max_length=4):
     except Exception as e:
         print(f"An error occurred: {e}")
 
-# Example usage
-pdf_path = 'D:\安全信封-合成工艺.pdf'
-brute_force_pdf_password(pdf_path, max_length=8)
+def run_pdf_password_brute_force():
+    root = Tk()
+    root.withdraw()
+
+    pdf_path = filedialog.askopenfilename(
+        title="选择要尝试密码的 PDF",
+        filetypes=[("PDF 文件", "*.pdf")],
+    )
+    if not pdf_path:
+        return
+
+    max_length = simpledialog.askinteger(
+        "最大密码长度",
+        "请输入最大尝试长度：",
+        initialvalue=4,
+        minvalue=1,
+        maxvalue=8,
+    )
+    if not max_length:
+        return
+
+    password = brute_force_pdf_password(pdf_path, max_length=max_length)
+    if password:
+        messagebox.showinfo("找到密码", f"密码是：{password}")
+    else:
+        messagebox.showinfo("完成", "未在指定长度内找到密码。")
+
+
+if __name__ == "__main__":
+    run_pdf_password_brute_force()

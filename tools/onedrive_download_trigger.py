@@ -1,4 +1,5 @@
 import os
+from tkinter import Tk, filedialog
 
 def touch_file(file_path):
     """
@@ -74,6 +75,15 @@ def main():
     download_onedrive_files(folder)
 
     input("\n按 Enter 键退出...")
+
+
+def run_onedrive_download_trigger():
+    root = Tk()
+    root.withdraw()
+    folder = filedialog.askdirectory(title="选择 OneDrive 文件夹")
+    if folder:
+        download_onedrive_files(folder)
+
 
 if __name__ == "__main__":
     main()
