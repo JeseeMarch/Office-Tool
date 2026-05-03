@@ -1,8 +1,17 @@
-import markdown
-from bs4 import BeautifulSoup
-from docx import Document
-from tkinter import Tk, filedialog
 import os
+from tkinter import Tk, filedialog, messagebox
+
+
+def _load_conversion_dependencies():
+    try:
+        import markdown
+        from bs4 import BeautifulSoup
+        from docx import Document
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "缺少 Markdown 转 Word 依赖，请先安装：pip install markdown beautifulsoup4 python-docx"
+        ) from exc
+    return markdown, BeautifulSoup, Document
 
 def select_markdown_file():
     root = Tk()
@@ -15,6 +24,8 @@ def select_markdown_file():
 
 def markdown_to_word(input_file, output_file):
     try:
+        markdown, BeautifulSoup, Document = _load_conversion_dependencies()
+
         # Step 1: 读取 Markdown 文件
         with open(input_file, 'r', encoding='utf-8') as f:
             markdown_text = f.read()
@@ -23,20 +34,15 @@ def markdown_to_word(input_file, output_file):
         html_body = markdown.markdown(markdown_text, extensions=['extra'])
         html = f"<html><body>{html_body}</body></html>"
 
-        # Step 3: 打印 HTML（调试）
-        print("\n---- HTML 输出 ----\n")
-        print(html)
-        print("\n-------------------\n")
-
-        # Step 4: 使用 BeautifulSoup 解析 HTML
+        # Step 3: 使用 BeautifulSoup 解析 HTML
         soup = BeautifulSoup(html, 'html.parser')
         body = soup.body
 
-        # Step 5: 创建 Word 文档
+        # Step 4: 创建 Word 文档
         doc = Document()
         doc.add_heading('Markdown 转换结果', level=0)
 
-        # Step 6: 遍历 HTML 元素，写入 Word
+        # Step 5: 遍历 HTML 元素，写入 Word
         for elem in body.children:
             if elem.name is None:
                 continue  # 忽略空行
@@ -57,10 +63,14 @@ def markdown_to_word(input_file, output_file):
             else:
                 doc.add_paragraph(elem.get_text())
 
-        # Step 7: 保存 Word 文档
+        # Step 6: 保存 Word 文档
         doc.save(output_file)
         print(f"\n✅ 成功生成 Word 文件：{output_file}")
     except Exception as e:
+        try:
+            messagebox.showerror("转换失败", str(e))
+        except Exception:
+            pass
         print(f"❌ 转换失败: {str(e)}")
 
 def run_markdown_to_docx():

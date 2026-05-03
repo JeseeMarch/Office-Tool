@@ -1,10 +1,19 @@
 import os
-from tkinter import Tk, filedialog, messagebox
+import sys
 
-from pydub import AudioSegment
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QMessageBox,
+)
 
 
 def convert_wav_to_mp3(input_path: str) -> str:
+    try:
+        from pydub import AudioSegment
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("缺少音频转换依赖，请先安装：pip install pydub，并确保 ffmpeg 可用。") from exc
+
     output_path = os.path.splitext(input_path)[0] + ".mp3"
     audio = AudioSegment.from_wav(input_path)
     audio.export(output_path, format="mp3")
@@ -12,12 +21,10 @@ def convert_wav_to_mp3(input_path: str) -> str:
 
 
 def run_wav_to_mp3() -> None:
-    root = Tk()
-    root.withdraw()
+    app = QApplication.instance() or QApplication(sys.argv)
 
-    files = filedialog.askopenfilenames(
-        title="选择 WAV 文件",
-        filetypes=[("WAV 文件", "*.wav")],
+    files, _ = QFileDialog.getOpenFileNames(
+        None, "选择 WAV 文件", "", "WAV 文件 (*.wav)"
     )
     if not files:
         return
@@ -31,9 +38,9 @@ def run_wav_to_mp3() -> None:
             failed.append(f"{path}: {exc}")
 
     if failed:
-        messagebox.showwarning("部分失败", "\n".join(failed))
+        QMessageBox.warning(None, "部分失败", "\n".join(failed))
     if outputs:
-        messagebox.showinfo("完成", "已生成：\n" + "\n".join(outputs))
+        QMessageBox.information(None, "完成", "已生成：\n" + "\n".join(outputs))
 
 
 if __name__ == "__main__":

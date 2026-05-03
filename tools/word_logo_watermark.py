@@ -1,22 +1,25 @@
 """
 在 Word (.docx) 页眉中插入公司 Logo 水印：与 Word 内置文字水印相同的 VML 机制，
 相对页面居中、负 z-index 衬于正文下方；正文区一般不可选中。
-输出「原名_logo.docx」。默认 assets/company_logo.png。
-
-说明：页眉内的 DrawingML「浮动图」(wp:anchor) 在 Word 中常无法显示，故改用 VML + v:imagedata。
+输出「原名_.docx」。默认 assets/company_logo.png。
 """
 
 from __future__ import annotations
 
 import io
 import os
+import sys
 from pathlib import Path
-from tkinter import Tk, filedialog, messagebox
 
 from docx import Document
 from docx.oxml import parse_xml
 from docx.oxml.ns import qn
 from PIL import Image, ImageEnhance
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QMessageBox,
+)
 
 VML_SHAPE_ID = "OfficeToolLogoVML"
 DOC_PR_NAME = "OfficeToolLogoWatermark"
@@ -48,7 +51,6 @@ def prepare_bw_logo_png(src: Path) -> io.BytesIO:
     gray = im.convert("L")
     gray = ImageEnhance.Contrast(gray).enhance(1.15)
     gray = ImageEnhance.Brightness(gray).enhance(0.95)
-    # 与白色的距离减半：灰阶更接近白纸（视觉上浓度约为原先一半）
     gray = gray.point(lambda p: min(255, int(round(255 - (255 - p) * 0.3))))
     buf = io.BytesIO()
     gray.save(buf, format="PNG")
@@ -77,7 +79,6 @@ def _iter_unique_headers(doc: Document):
 
 
 def _strip_logo_watermark(hdr_element) -> None:
-    """移除本工具写入的 VML Logo 或旧版 DrawingML Logo。"""
     dead_ids: set[int] = set()
     for p in list(hdr_element):
         if p.tag != qn("w:p"):
@@ -118,7 +119,6 @@ def _vml_logo_paragraph_xml(r_id: str, width_pt: float, height_pt: float) -> str
 def add_logo_watermark_to_document(doc: Document, logo_stream: io.BytesIO) -> None:
     logo_stream.seek(0)
     first_sec = doc.sections[0]
-    # 相对页面宽度约 52% × 1.5 ≈ 78%
     target_w = int(first_sec.page_width * 0.52 * 1.5)
 
     for header in _iter_unique_headers(doc):
@@ -134,18 +134,18 @@ def add_logo_watermark_to_document(doc: Document, logo_stream: io.BytesIO) -> No
 
 
 def run_word_logo_watermark():
+    app = QApplication.instance() or QApplication(sys.argv)
+
     logo_path = default_logo_path()
     if not logo_path.is_file():
-        messagebox.showerror(
-            "缺少 Logo",
+        QMessageBox.critical(
+            None, "缺少 Logo",
             f"未找到默认 Logo 文件：\n{logo_path}\n请将公司 Logo 保存为该路径。",
         )
         return
 
-    Tk().withdraw()
-    files = filedialog.askopenfilenames(
-        title="选择要加 Logo 水印的 Word 文件",
-        filetypes=[("Word", "*.docx")],
+    files, _ = QFileDialog.getOpenFileNames(
+        None, "选择要加 Logo 水印的 Word 文件", "", "Word (*.docx)"
     )
     if not files:
         return
@@ -153,7 +153,7 @@ def run_word_logo_watermark():
     try:
         logo_png = prepare_bw_logo_png(logo_path)
     except Exception as e:
-        messagebox.showerror("错误", f"处理 Logo 图片失败：{e}")
+        QMessageBox.critical(None, "错误", f"处理 Logo 图片失败：{e}")
         return
 
     failed = []
@@ -162,7 +162,7 @@ def run_word_logo_watermark():
         try:
             folder = os.path.dirname(path)
             base = os.path.splitext(os.path.basename(path))[0]
-            out_path = os.path.join(folder, f"{base}_logo.docx")
+            out_path = os.path.join(folder, f"{base}_.docx")
 
             doc = Document(path)
             add_logo_watermark_to_document(doc, logo_png)
@@ -172,10 +172,10 @@ def run_word_logo_watermark():
             failed.append(f"{path}: {exc}")
 
     if failed:
-        messagebox.showwarning("完成（部分失败）", "\n".join(failed))
+        QMessageBox.warning(None, "完成（部分失败）", "\n".join(failed))
     if outputs:
-        messagebox.showinfo(
-            "完成",
+        QMessageBox.information(
+            None, "完成",
             "已生成（原文件未修改）：\n"
             + "\n".join(outputs)
             + "\n\n水印使用 Word 兼容的页眉 VML 图片，居中衬于文字下方。"

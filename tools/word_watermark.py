@@ -1,10 +1,24 @@
 import os
-from tkinter import Tk, filedialog, messagebox, simpledialog
+import sys
 from xml.sax.saxutils import escape
 
 from docx import Document
 from docx.oxml import parse_xml
 from docx.oxml.ns import qn
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+)
 
 WATERMARK_ID = "OfficeToolTextWatermark"
 V_NS = "{urn:schemas-microsoft-com:vml}shape"
@@ -62,19 +76,87 @@ def add_text_watermark(doc: Document, text: str) -> None:
         header._element.insert(0, parse_xml(_watermark_xml(text)))
 
 
-def run_word_watermark() -> None:
-    root = Tk()
-    root.withdraw()
+class _WordWatermarkDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Word 加水印")
+        self.setMinimumWidth(480)
+        layout = QVBoxLayout(self)
 
-    files = filedialog.askopenfilenames(
-        title="选择要加水印的 Word 文件",
-        filetypes=[("Word 文档", "*.docx")],
-    )
-    if not files:
+        # --- 文件选择 ---
+        self._file_count_label = QLabel("Word 文件（0 个已选）：")
+        layout.addWidget(self._file_count_label)
+
+        file_row = QHBoxLayout()
+        self._file_list = QListWidget()
+        self._file_list.setMinimumHeight(100)
+        file_row.addWidget(self._file_list)
+
+        btn_col = QVBoxLayout()
+        add_btn = QPushButton("添加文件")
+        add_btn.clicked.connect(self._add_files)
+        rm_btn = QPushButton("移除选中")
+        rm_btn.clicked.connect(self._remove_selected)
+        btn_col.addWidget(add_btn)
+        btn_col.addWidget(rm_btn)
+        btn_col.addStretch()
+        file_row.addLayout(btn_col)
+        layout.addLayout(file_row)
+
+        # --- 水印文字 ---
+        form = QFormLayout()
+        self._wm_text = QLineEdit("水印")
+        form.addRow("水印内容：", self._wm_text)
+        layout.addLayout(form)
+
+        # --- 确定 / 取消 ---
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("确定")
+        buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self._file_list.model().rowsInserted.connect(self._update_file_count)
+        self._file_list.model().rowsRemoved.connect(self._update_file_count)
+
+    def _add_files(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "选择 Word 文件", "", "Word 文档 (*.docx)")
+        existing = {self._file_list.item(i).text() for i in range(self._file_list.count())}
+        for f in files:
+            if f not in existing:
+                self._file_list.addItem(f)
+
+    def _remove_selected(self):
+        for item in reversed(self._file_list.selectedItems()):
+            self._file_list.takeItem(self._file_list.row(item))
+
+    def _update_file_count(self):
+        n = self._file_list.count()
+        self._file_count_label.setText(f"Word 文件（{n} 个已选）：")
+
+    def selected_files(self) -> list[str]:
+        return [self._file_list.item(i).text() for i in range(self._file_list.count())]
+
+    def watermark_text(self) -> str:
+        return self._wm_text.text().strip()
+
+
+def run_word_watermark() -> None:
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    dialog = _WordWatermarkDialog()
+    if dialog.exec() != QDialog.Accepted:
         return
 
-    text = simpledialog.askstring("水印文字", "请输入水印内容：", initialvalue="水印")
+    files = dialog.selected_files()
+    if not files:
+        QMessageBox.information(None, "提示", "未选择任何文件。")
+        return
+
+    text = dialog.watermark_text()
     if not text:
+        QMessageBox.warning(None, "提示", "未输入水印内容。")
         return
 
     outputs = []
@@ -83,7 +165,7 @@ def run_word_watermark() -> None:
         try:
             folder = os.path.dirname(path)
             base = os.path.splitext(os.path.basename(path))[0]
-            output_path = os.path.join(folder, f"{base}_watermark.docx")
+            output_path = os.path.join(folder, f"{base}_.docx")
             doc = Document(path)
             add_text_watermark(doc, text)
             doc.save(output_path)
@@ -92,9 +174,9 @@ def run_word_watermark() -> None:
             failed.append(f"{path}: {exc}")
 
     if failed:
-        messagebox.showwarning("部分失败", "\n".join(failed))
+        QMessageBox.warning(None, "部分失败", "\n".join(failed))
     if outputs:
-        messagebox.showinfo("完成", "已生成：\n" + "\n".join(outputs))
+        QMessageBox.information(None, "完成", "已生成：\n" + "\n".join(outputs))
 
 
 if __name__ == "__main__":

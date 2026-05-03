@@ -1,116 +1,161 @@
-import fitz  # PyMuPDF
-from PIL import Image, ImageDraw, ImageFont
 import io
 import os
-from tkinter import Tk, filedialog, simpledialog, messagebox
+import sys
+
+import fitz  # PyMuPDF
+from PIL import Image, ImageDraw, ImageFont
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+)
+
 
 def add_watermark(image, text, font_size=50, opacity=0.1):
-    """
-    在图片上添加隐形水印
-    """
-    # 创建一个透明的水印层
     watermark = Image.new("RGBA", image.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(watermark)
-    
-    # 设置字体和水印文本
+
     try:
         font = ImageFont.truetype("arial.ttf", font_size)
     except IOError:
         font = ImageFont.load_default()
-    
-    # 计算水印位置（居中）
-    # 使用 textbbox 获取文本的边界框
+
     bbox = draw.textbbox((0, 0), text, font=font)
     text_width = bbox[2] - bbox[0]
     text_height = bbox[3] - bbox[1]
     x = (image.width - text_width) // 2
     y = (image.height - text_height) // 2
-    
-    # 添加水印文本
+
     draw.text((x, y), text, font=font, fill=(255, 255, 255, int(255 * opacity)))
-    
-    # 将水印层叠加到原图上
-    watermarked_image = Image.alpha_composite(image.convert("RGBA"), watermark)
-    return watermarked_image.convert("RGB")
+    return Image.alpha_composite(image.convert("RGBA"), watermark).convert("RGB")
+
 
 def pdf_to_image_pdf(input_pdf_path, output_pdf_path, watermark_text):
-    """
-    将PDF转换为图片型PDF，并添加隐形水印
-    """
-    # 打开PDF文件
     pdf_document = fitz.open(input_pdf_path)
-    image_pdf_document = fitz.open()  # 创建一个新的PDF文档
-    
+    image_pdf_document = fitz.open()
+
     for page_num in range(len(pdf_document)):
         page = pdf_document.load_page(page_num)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 提高分辨率
-        
-        # 将页面转换为PIL图像
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+
         img = Image.open(io.BytesIO(pix.tobytes("png")))
-        
-        # 添加水印
         watermarked_img = add_watermark(img, watermark_text)
-        
-        # 将水印图像转换为PDF页面
+
         img_bytes = io.BytesIO()
         watermarked_img.save(img_bytes, format="PDF")
         img_pdf = fitz.open("pdf", img_bytes.getvalue())
-        
-        # 将页面插入到新的PDF文档中
         image_pdf_document.insert_pdf(img_pdf)
-    
-    # 保存新的PDF文件
+
     image_pdf_document.save(output_pdf_path)
     image_pdf_document.close()
     pdf_document.close()
 
-def select_files_and_watermark():
-    """
-    通过GUI选择文件并输入水印内容
-    """
-    # 初始化Tkinter
-    root = Tk()
-    root.withdraw()  # 隐藏主窗口
-    
-    # 选择多个PDF文件
-    file_paths = filedialog.askopenfilenames(
-        title="选择PDF文件",
-        filetypes=[("PDF文件", "*.pdf")]
-    )
-    if not file_paths:
-        messagebox.showinfo("提示", "未选择文件！")
-        return
-    
-    # 输入水印内容
-    watermark_text = simpledialog.askstring("输入水印内容", "请输入水印文本：")
-    if not watermark_text:
-        messagebox.showinfo("提示", "未输入水印内容！")
-        return
-    
-    # 处理每个文件
-    for file_path in file_paths:
-        # 获取原文件目录和文件名
-        file_dir = os.path.dirname(file_path)
-        file_name = os.path.basename(file_path)
-        file_base_name, file_ext = os.path.splitext(file_name)
-        
-        # 生成新文件名（原文件名 + "_"）
-        new_file_name = f"{file_base_name}_{file_ext}"
-        output_pdf_path = os.path.join(file_dir, new_file_name)
-        
-        try:
-            pdf_to_image_pdf(file_path, output_pdf_path, watermark_text)
-            print(f"处理完成：{file_name} -> {new_file_name}")
-        except Exception as e:
-            print(f"处理失败：{file_name}，错误：{e}")
-    
-    messagebox.showinfo("完成", "所有文件处理完成！")
+
+class _HiddenWatermarkDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("PDF 居中浅水印")
+        self.setMinimumWidth(480)
+        layout = QVBoxLayout(self)
+
+        # --- 文件选择 ---
+        self._file_count_label = QLabel("PDF 文件（0 个已选）：")
+        layout.addWidget(self._file_count_label)
+
+        file_row = QHBoxLayout()
+        self._file_list = QListWidget()
+        self._file_list.setMinimumHeight(100)
+        file_row.addWidget(self._file_list)
+
+        btn_col = QVBoxLayout()
+        add_btn = QPushButton("添加文件")
+        add_btn.clicked.connect(self._add_files)
+        rm_btn = QPushButton("移除选中")
+        rm_btn.clicked.connect(self._remove_selected)
+        btn_col.addWidget(add_btn)
+        btn_col.addWidget(rm_btn)
+        btn_col.addStretch()
+        file_row.addLayout(btn_col)
+        layout.addLayout(file_row)
+
+        # --- 水印文字 ---
+        form = QFormLayout()
+        self._wm_text = QLineEdit("水印")
+        form.addRow("水印内容：", self._wm_text)
+        layout.addLayout(form)
+
+        # --- 确定 / 取消 ---
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("确定")
+        buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self._file_list.model().rowsInserted.connect(self._update_file_count)
+        self._file_list.model().rowsRemoved.connect(self._update_file_count)
+
+    def _add_files(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "选择 PDF 文件", "", "PDF 文件 (*.pdf)")
+        existing = {self._file_list.item(i).text() for i in range(self._file_list.count())}
+        for f in files:
+            if f not in existing:
+                self._file_list.addItem(f)
+
+    def _remove_selected(self):
+        for item in reversed(self._file_list.selectedItems()):
+            self._file_list.takeItem(self._file_list.row(item))
+
+    def _update_file_count(self):
+        n = self._file_list.count()
+        self._file_count_label.setText(f"PDF 文件（{n} 个已选）：")
+
+    def selected_files(self) -> list[str]:
+        return [self._file_list.item(i).text() for i in range(self._file_list.count())]
+
+    def watermark_text(self) -> str:
+        return self._wm_text.text().strip()
 
 
 def run_pdf_hidden_watermark():
-    select_files_and_watermark()
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    dialog = _HiddenWatermarkDialog()
+    if dialog.exec() != QDialog.Accepted:
+        return
+
+    files = dialog.selected_files()
+    if not files:
+        QMessageBox.information(None, "提示", "未选择任何文件。")
+        return
+
+    watermark_text = dialog.watermark_text()
+    if not watermark_text:
+        QMessageBox.warning(None, "提示", "未输入水印内容。")
+        return
+
+    success = 0
+    for file_path in files:
+        file_dir = os.path.dirname(file_path)
+        file_base_name, file_ext = os.path.splitext(os.path.basename(file_path))
+        output_pdf_path = os.path.join(file_dir, f"{file_base_name}_{file_ext}")
+        try:
+            pdf_to_image_pdf(file_path, output_pdf_path, watermark_text)
+            success += 1
+        except Exception as e:
+            print(f"处理失败：{file_path}，错误：{e}")
+
+    QMessageBox.information(None, "完成", f"所有文件处理完成，成功 {success} 个。")
 
 
-# 运行程序
 if __name__ == "__main__":
-    select_files_and_watermark()
+    run_pdf_hidden_watermark()

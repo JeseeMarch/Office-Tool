@@ -1,64 +1,95 @@
 import os
-import tkinter as tk
-from tkinter import filedialog, messagebox
+import sys
 
-entry_directory = None
-entry_old = None
-entry_new = None
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+)
 
-def select_directory():
-    """弹出文件夹选择对话框"""
-    directory = filedialog.askdirectory()
-    if directory:
-        entry_directory.delete(0, tk.END)
-        entry_directory.insert(0, directory)
 
-def batch_rename_files():
-    """执行批量重命名"""
-    directory = entry_directory.get()
-    old_str = entry_old.get()
-    new_str = entry_new.get()
-
-    if not directory or not old_str or not new_str:
-        messagebox.showwarning("输入错误", "请填写完整信息！")
-        return
-
+def batch_rename_files(directory, old_str, new_str) -> int:
     renamed_count = 0
     for root, _, files in os.walk(directory):
         for filename in files:
             if old_str in filename:
                 new_filename = filename.replace(old_str, new_str)
-                old_path = os.path.join(root, filename)
-                new_path = os.path.join(root, new_filename)
-                os.rename(old_path, new_path)
+                os.rename(os.path.join(root, filename), os.path.join(root, new_filename))
                 renamed_count += 1
+    return renamed_count
 
-    messagebox.showinfo("完成", f"重命名完成，共修改 {renamed_count} 个文件")
+
+class _BatchRenameDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("批量替换文件名")
+        self.setMinimumWidth(460)
+        layout = QVBoxLayout(self)
+
+        form = QFormLayout()
+
+        dir_row = QHBoxLayout()
+        self._dir_input = QLineEdit()
+        self._dir_input.setPlaceholderText("选择文件夹…")
+        browse_btn = QPushButton("浏览")
+        browse_btn.clicked.connect(self._browse_folder)
+        dir_row.addWidget(self._dir_input)
+        dir_row.addWidget(browse_btn)
+        form.addRow("选择文件夹：", dir_row)
+
+        self._old_str = QLineEdit()
+        self._new_str = QLineEdit()
+        form.addRow("原文件名包含：", self._old_str)
+        form.addRow("新文件名替换为：", self._new_str)
+        layout.addLayout(form)
+
+        # --- 确定 / 取消 ---
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("执行重命名")
+        buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _browse_folder(self):
+        d = QFileDialog.getExistingDirectory(self, "选择文件夹")
+        if d:
+            self._dir_input.setText(d)
+
+    def directory(self) -> str:
+        return self._dir_input.text().strip()
+
+    def old_str(self) -> str:
+        return self._old_str.text()
+
+    def new_str(self) -> str:
+        return self._new_str.text()
+
 
 def run_batch_rename_filenames():
-    global entry_directory, entry_old, entry_new
+    app = QApplication.instance() or QApplication(sys.argv)
 
-    root = tk.Tk()
-    root.title("批量文件名替换")
+    dialog = _BatchRenameDialog()
+    if dialog.exec() != QDialog.Accepted:
+        return
 
-    tk.Label(root, text="选择文件夹:").grid(row=0, column=0, padx=10, pady=5)
-    entry_directory = tk.Entry(root, width=40)
-    entry_directory.grid(row=0, column=1, padx=10, pady=5)
-    btn_select = tk.Button(root, text="浏览", command=select_directory)
-    btn_select.grid(row=0, column=2, padx=10, pady=5)
+    directory = dialog.directory()
+    old_str = dialog.old_str()
+    new_str = dialog.new_str()
 
-    tk.Label(root, text="原文件名包含:").grid(row=1, column=0, padx=10, pady=5)
-    entry_old = tk.Entry(root, width=30)
-    entry_old.grid(row=1, column=1, padx=10, pady=5)
+    if not directory or not old_str:
+        QMessageBox.warning(None, "输入错误", "请填写文件夹路径和要查找的文件名内容。")
+        return
 
-    tk.Label(root, text="新文件名替换为:").grid(row=2, column=0, padx=10, pady=5)
-    entry_new = tk.Entry(root, width=30)
-    entry_new.grid(row=2, column=1, padx=10, pady=5)
-
-    btn_rename = tk.Button(root, text="执行重命名", command=batch_rename_files)
-    btn_rename.grid(row=3, column=0, columnspan=3, pady=10)
-
-    root.mainloop()
+    count = batch_rename_files(directory, old_str, new_str)
+    QMessageBox.information(None, "完成", f"重命名完成，共修改 {count} 个文件。")
 
 
 if __name__ == "__main__":
