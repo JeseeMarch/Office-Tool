@@ -46,7 +46,7 @@ def run_pdf_password_brute_force():
         filetypes=[("PDF 文件", "*.pdf")],
     )
     if not pdf_path:
-        return
+        return "已取消：PDF 密码尝试。"
 
     max_length = simpledialog.askinteger(
         "最大密码长度",
@@ -56,13 +56,12 @@ def run_pdf_password_brute_force():
         maxvalue=8,
     )
     if not max_length:
-        return
+        return "已取消：PDF 密码尝试。"
 
     password = brute_force_pdf_password(pdf_path, max_length=max_length)
     if password:
-        messagebox.showinfo("找到密码", f"密码是：{password}")
-    else:
-        messagebox.showinfo("完成", "未在指定长度内找到密码。")
+        return f"已找到 PDF 密码：{password}"
+    return "未在指定长度内找到密码。"
 
 
 if __name__ == "__main__":

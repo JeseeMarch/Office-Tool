@@ -1,12 +1,19 @@
+from __future__ import annotations
+
+import io
 import os
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 from xml.sax.saxutils import escape
 
 from docx import Document
 from docx.oxml import parse_xml
 from docx.oxml.ns import qn
+from PIL import Image, ImageEnhance
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -16,12 +23,30 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QMessageBox,
+    QProgressBar,
     QPushButton,
+    QRadioButton,
+    QTextEdit,
     QVBoxLayout,
 )
 
-WATERMARK_ID = "OfficeToolTextWatermark"
+
+TOOL_VERSION = "20260504-word-watermark-modes"
+TEXT_WATERMARK_ID_PREFIX = "OfficeToolTextWatermark"
+IMAGE_WATERMARK_ID = "OfficeToolImageWatermark"
+LEGACY_IMAGE_WATERMARK_IDS = {"OfficeToolLogoVML"}
+DOC_PR_NAME = "OfficeToolImageWatermark"
+LEGACY_DOC_PR_NAMES = {"OfficeToolLogoWatermark"}
 V_NS = "{urn:schemas-microsoft-com:vml}shape"
+WP_DRAWINGML_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+EMU_PER_PT = 12700
+
+
+@dataclass(frozen=True)
+class WatermarkOptions:
+    kind: str
+    text: str = ""
+    image_path: str = ""
 
 
 def _iter_unique_headers(doc: Document):
@@ -42,25 +67,40 @@ def _iter_unique_headers(doc: Document):
 
 
 def _remove_existing_watermarks(header_element) -> None:
+    dead = set()
     for paragraph in list(header_element):
         if paragraph.tag != qn("w:p"):
             continue
         for shape in paragraph.iter(V_NS):
-            if shape.get("id") == WATERMARK_ID:
-                header_element.remove(paragraph)
+            shape_id = shape.get("id", "")
+            if (
+                shape_id.startswith(TEXT_WATERMARK_ID_PREFIX)
+                or shape_id == IMAGE_WATERMARK_ID
+                or shape_id in LEGACY_IMAGE_WATERMARK_IDS
+            ):
+                dead.add(id(paragraph))
                 break
+        for drawing in paragraph.findall(".//" + qn("w:drawing")):
+            for doc_pr in drawing.iter(f"{{{WP_DRAWINGML_NS}}}docPr"):
+                if doc_pr.get("name") == DOC_PR_NAME or doc_pr.get("name") in LEGACY_DOC_PR_NAMES:
+                    dead.add(id(paragraph))
+                    break
+    for paragraph in list(header_element):
+        if paragraph.tag == qn("w:p") and id(paragraph) in dead:
+            header_element.remove(paragraph)
 
 
-def _watermark_xml(text: str) -> str:
+def _text_watermark_xml(text: str, index: int, line_count: int) -> str:
     escaped_text = escape(text, {'"': "&quot;"})
+    top = -70 + index * 70 - (line_count - 1) * 35
     return f"""<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
   xmlns:v="urn:schemas-microsoft-com:vml"
   xmlns:o="urn:schemas-microsoft-com:office:office"
   xmlns:w10="urn:schemas-microsoft-com:office:word">
   <w:r>
     <w:pict>
-      <v:shape id="{WATERMARK_ID}" o:spid="_x0000_s2050" type="#_x0000_t136"
-        style="position:absolute;margin-left:0;margin-top:0;width:420pt;height:120pt;rotation:315;z-index:-251654144;mso-position-horizontal:center;mso-position-horizontal-relative:page;mso-position-vertical:center;mso-position-vertical-relative:page"
+      <v:shape id="{TEXT_WATERMARK_ID_PREFIX}{index}" o:spid="_x0000_s2050" type="#_x0000_t136"
+        style="position:absolute;margin-left:0;margin-top:{top}pt;width:420pt;height:120pt;rotation:315;z-index:-251654144;mso-position-horizontal:center;mso-position-horizontal-relative:page;mso-position-vertical:center;mso-position-vertical-relative:page"
         fillcolor="#d8d8d8" stroked="f">
         <v:textpath on="t" string="{escaped_text}" style="font-family:SimSun;font-size:44pt"/>
         <w10:wrap anchorx="margin" anchory="margin"/>
@@ -70,20 +110,82 @@ def _watermark_xml(text: str) -> str:
 </w:p>"""
 
 
-def add_text_watermark(doc: Document, text: str) -> None:
-    for header in _iter_unique_headers(doc):
-        _remove_existing_watermarks(header._element)
-        header._element.insert(0, parse_xml(_watermark_xml(text)))
+def _prepare_image_watermark(src: Path) -> io.BytesIO:
+    image = Image.open(src)
+    if image.mode == "P":
+        image = image.convert("RGBA")
+    if image.mode == "RGBA":
+        bg = Image.new("RGB", image.size, (255, 255, 255))
+        bg.paste(image, mask=image.split()[3])
+        image = bg
+    else:
+        image = image.convert("RGB")
+
+    gray = image.convert("L")
+    gray = ImageEnhance.Contrast(gray).enhance(1.15)
+    gray = gray.point(lambda p: min(255, int(round(255 - (255 - p) * 0.3))))
+    buf = io.BytesIO()
+    gray.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
+def _image_watermark_xml(r_id: str, width_pt: float, height_pt: float) -> str:
+    return f"""<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:v="urn:schemas-microsoft-com:vml"
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+  xmlns:w10="urn:schemas-microsoft-com:office:word">
+  <w:r>
+    <w:pict>
+      <v:shape id="{IMAGE_WATERMARK_ID}" o:spid="_x0000_s2051" type="#_x0000_t75"
+        style="position:absolute;margin-left:0;margin-top:0;width:{width_pt:.1f}pt;height:{height_pt:.1f}pt;z-index:-251658752;mso-position-horizontal:center;mso-position-horizontal-relative:page;mso-position-vertical:center;mso-position-vertical-relative:page"
+        filled="f" stroked="f">
+        <v:imagedata r:id="{r_id}" o:title="watermark"/>
+      </v:shape>
+      <w10:wrap anchorx="margin" anchory="margin"/>
+    </w:pict>
+  </w:r>
+</w:p>"""
+
+
+def add_watermark(doc: Document, options: WatermarkOptions) -> None:
+    if options.kind in {"single_text", "multi_text"}:
+        lines = [line.strip() for line in options.text.splitlines() if line.strip()]
+        if options.kind == "single_text":
+            lines = lines[:1]
+        if not lines:
+            raise ValueError("未输入水印文字。")
+        for header in _iter_unique_headers(doc):
+            _remove_existing_watermarks(header._element)
+            for index, line in enumerate(lines):
+                header._element.insert(index, parse_xml(_text_watermark_xml(line, index, len(lines))))
+        return
+
+    if options.kind == "image":
+        if not options.image_path:
+            raise ValueError("未选择水印图片。")
+        image_stream = _prepare_image_watermark(Path(options.image_path))
+        first_sec = doc.sections[0]
+        target_width = int(first_sec.page_width * 0.52 * 1.5)
+        for header in _iter_unique_headers(doc):
+            _remove_existing_watermarks(header._element)
+            image_stream.seek(0)
+            r_id, image = header.part.get_or_add_image(image_stream)
+            cx, cy = image.scaled_dimensions(target_width, None)
+            header._element.insert(0, parse_xml(_image_watermark_xml(r_id, int(cx) / EMU_PER_PT, int(cy) / EMU_PER_PT)))
+        return
+
+    raise ValueError(f"未知水印类型：{options.kind}")
 
 
 class _WordWatermarkDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Word 加水印")
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(560)
         layout = QVBoxLayout(self)
 
-        # --- 文件选择 ---
         self._file_count_label = QLabel("Word 文件（0 个已选）：")
         layout.addWidget(self._file_count_label)
 
@@ -103,13 +205,36 @@ class _WordWatermarkDialog(QDialog):
         file_row.addLayout(btn_col)
         layout.addLayout(file_row)
 
-        # --- 水印文字 ---
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("水印类型："))
+        self._mode_group = QButtonGroup(self)
+        self._single_text = QRadioButton("单行水印")
+        self._multi_text = QRadioButton("多行水印")
+        self._image = QRadioButton("图片水印")
+        self._single_text.setChecked(True)
+        self._mode_group.addButton(self._single_text, 0)
+        self._mode_group.addButton(self._multi_text, 1)
+        self._mode_group.addButton(self._image, 2)
+        for button in (self._single_text, self._multi_text, self._image):
+            mode_row.addWidget(button)
+        mode_row.addStretch()
+        layout.addLayout(mode_row)
+
         form = QFormLayout()
-        self._wm_text = QLineEdit("水印")
-        form.addRow("水印内容：", self._wm_text)
+        self._wm_text = QTextEdit("水印")
+        self._wm_text.setMaximumHeight(90)
+        form.addRow("水印文字：", self._wm_text)
+
+        image_row = QHBoxLayout()
+        self._image_path = QLineEdit()
+        self._image_path.setPlaceholderText("选择图片水印文件…")
+        image_btn = QPushButton("浏览")
+        image_btn.clicked.connect(self._browse_image)
+        image_row.addWidget(self._image_path)
+        image_row.addWidget(image_btn)
+        form.addRow("水印图片：", image_row)
         layout.addLayout(form)
 
-        # --- 确定 / 取消 ---
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("确定")
         buttons.button(QDialogButtonBox.Cancel).setText("取消")
@@ -117,66 +242,93 @@ class _WordWatermarkDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 1)
+        self._progress.setValue(0)
+        layout.addWidget(self._progress)
+        self._progress.hide()
+
         self._file_list.model().rowsInserted.connect(self._update_file_count)
         self._file_list.model().rowsRemoved.connect(self._update_file_count)
 
     def _add_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "选择 Word 文件", "", "Word 文档 (*.docx)")
         existing = {self._file_list.item(i).text() for i in range(self._file_list.count())}
-        for f in files:
-            if f not in existing:
-                self._file_list.addItem(f)
+        for file_path in files:
+            if file_path not in existing:
+                self._file_list.addItem(file_path)
 
     def _remove_selected(self):
         for item in reversed(self._file_list.selectedItems()):
             self._file_list.takeItem(self._file_list.row(item))
 
+    def _browse_image(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择水印图片", "", "图片文件 (*.png *.jpg *.jpeg *.bmp)")
+        if path:
+            self._image_path.setText(path)
+            self._image.setChecked(True)
+
     def _update_file_count(self):
-        n = self._file_list.count()
-        self._file_count_label.setText(f"Word 文件（{n} 个已选）：")
+        self._file_count_label.setText(f"Word 文件（{self._file_list.count()} 个已选）：")
 
     def selected_files(self) -> list[str]:
         return [self._file_list.item(i).text() for i in range(self._file_list.count())]
 
-    def watermark_text(self) -> str:
-        return self._wm_text.text().strip()
+    def options(self) -> WatermarkOptions:
+        checked = self._mode_group.checkedId()
+        if checked == 2:
+            return WatermarkOptions(kind="image", image_path=self._image_path.text().strip())
+        if checked == 1:
+            return WatermarkOptions(kind="multi_text", text=self._wm_text.toPlainText().strip())
+        return WatermarkOptions(kind="single_text", text=self._wm_text.toPlainText().strip())
+
+    def start_progress(self, maximum: int) -> None:
+        self._progress.setRange(0, max(1, maximum))
+        self._progress.setValue(0)
+        self.show()
+        QApplication.processEvents()
+
+    def set_progress(self, value: int) -> None:
+        self._progress.setValue(value)
+        QApplication.processEvents()
 
 
-def run_word_watermark() -> None:
+def run_word_watermark(progress_callback=None) -> str:
     app = QApplication.instance() or QApplication(sys.argv)
 
     dialog = _WordWatermarkDialog()
     if dialog.exec() != QDialog.Accepted:
-        return
+        return "已取消：Word 加水印。"
 
     files = dialog.selected_files()
     if not files:
-        QMessageBox.information(None, "提示", "未选择任何文件。")
-        return
+        return "未选择任何 Word 文件，未处理。"
 
-    text = dialog.watermark_text()
-    if not text:
-        QMessageBox.warning(None, "提示", "未输入水印内容。")
-        return
-
+    options = dialog.options()
     outputs = []
     failed = []
-    for path in files:
+    if progress_callback:
+        progress_callback(0, len(files))
+    for index, path in enumerate(files, start=1):
         try:
             folder = os.path.dirname(path)
             base = os.path.splitext(os.path.basename(path))[0]
             output_path = os.path.join(folder, f"{base}_.docx")
             doc = Document(path)
-            add_text_watermark(doc, text)
+            add_watermark(doc, options)
             doc.save(output_path)
             outputs.append(output_path)
         except Exception as exc:
             failed.append(f"{path}: {exc}")
+        if progress_callback:
+            progress_callback(index, len(files))
 
     if failed:
         QMessageBox.warning(None, "部分失败", "\n".join(failed))
     if outputs:
-        QMessageBox.information(None, "完成", "已生成：\n" + "\n".join(outputs))
+        message = "已生成：\n" + "\n".join(outputs)
+        return message.replace("\n", " ")
+    return "Word 加水印未生成文件。"
 
 
 if __name__ == "__main__":

@@ -20,14 +20,14 @@ def convert_wav_to_mp3(input_path: str) -> str:
     return output_path
 
 
-def run_wav_to_mp3() -> None:
+def run_wav_to_mp3() -> str:
     app = QApplication.instance() or QApplication(sys.argv)
 
     files, _ = QFileDialog.getOpenFileNames(
         None, "选择 WAV 文件", "", "WAV 文件 (*.wav)"
     )
     if not files:
-        return
+        return "已取消：WAV 转 MP3。"
 
     outputs = []
     failed = []
@@ -40,7 +40,8 @@ def run_wav_to_mp3() -> None:
     if failed:
         QMessageBox.warning(None, "部分失败", "\n".join(failed))
     if outputs:
-        QMessageBox.information(None, "完成", "已生成：\n" + "\n".join(outputs))
+        return "已生成：" + " ".join(outputs)
+    return "WAV 转 MP3 未生成文件。"
 
 
 if __name__ == "__main__":

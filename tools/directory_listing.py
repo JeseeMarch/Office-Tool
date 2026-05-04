@@ -107,13 +107,13 @@ def main() -> int:
     return 0
 
 
-def run_directory_listing_gui() -> None:
+def run_directory_listing_gui() -> str:
     root = Tk()
     root.withdraw()
 
     folder = filedialog.askdirectory(title="选择要导出的目录")
     if not folder:
-        return
+        return "已取消：目录树导出。"
 
     output_path = filedialog.asksaveasfilename(
         title="保存目录清单",
@@ -122,15 +122,16 @@ def run_directory_listing_gui() -> None:
         filetypes=[("Word 文档", "*.docx")],
     )
     if not output_path:
-        return
+        return "已取消：目录树导出。"
 
     try:
         root_path = Path(folder).resolve()
         entries = walk_tree(root_path)
         create_document(root_path, entries, Path(output_path).resolve())
-        messagebox.showinfo("完成", f"已导出 {len(entries)} 条目录记录。")
+        return f"已导出 {len(entries)} 条目录记录：{output_path}"
     except Exception as exc:
         messagebox.showerror("导出失败", str(exc))
+        return f"目录树导出失败：{exc}"
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QRadioButton,
     QSpinBox,
@@ -430,6 +431,12 @@ class PdfToImagePdfDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 1)
+        self._progress.setValue(0)
+        root.addWidget(self._progress)
+        self._progress.hide()
+
         self._with_watermark.toggled.connect(self._watermark_box.setVisible)
         self._text_watermark.toggled.connect(self._sync_watermark_panels)
         self._image_watermark.toggled.connect(self._sync_watermark_panels)
@@ -486,17 +493,26 @@ class PdfToImagePdfDialog(QDialog):
     def process_options(self) -> ProcessOptions:
         return ProcessOptions(watermark=self.watermark_options())
 
+    def start_progress(self, maximum: int) -> None:
+        self._progress.setRange(0, max(1, maximum))
+        self._progress.setValue(0)
+        self.show()
+        QApplication.processEvents()
 
-def process_pdf() -> None:
+    def set_progress(self, value: int) -> None:
+        self._progress.setValue(value)
+        QApplication.processEvents()
+
+
+def process_pdf(progress_callback=None) -> str:
     app = QApplication.instance() or QApplication(sys.argv)
     dialog = PdfToImagePdfDialog()
     if dialog.exec() != QDialog.Accepted:
-        return
+        return "已取消：PDF 转图片型 PDF。"
 
     files = dialog.selected_files()
     if not files:
-        QMessageBox.information(None, "提示", "未选择任何文件。")
-        return
+        return "未选择任何 PDF 文件，未处理。"
 
     generated_inputs = [path for path in files if _looks_like_generated_output(path)]
     if generated_inputs:
@@ -531,11 +547,15 @@ def process_pdf() -> None:
 
     outputs: list[str] = []
     failures: list[str] = []
-    for file_path in files:
+    if progress_callback:
+        progress_callback(0, len(files))
+    for index, file_path in enumerate(files, start=1):
         try:
             outputs.append(convert_pdf_to_image_pdf(file_path, options))
         except Exception as exc:
             failures.append(f"{os.path.basename(file_path)}\n错误信息：{exc}")
+        if progress_callback:
+            progress_callback(index, len(files))
 
     for output in outputs:
         print(f"[输出文件] {output}")
@@ -546,21 +566,14 @@ def process_pdf() -> None:
 
     output_text = "\n".join(outputs) if outputs else "（无）"
     if not failures:
-        QMessageBox.information(
-            None,
-            "完成",
-            f"处理完成。\n本次设置：{_process_summary(options)}\n\n已生成：\n{output_text}",
-        )
-        return
+        return f"处理完成。本次设置：{_process_summary(options)} 成功：{len(outputs)} 个 已生成：{output_text}"
 
     failure_text = "\n\n".join(failures[:5])
     if len(failures) > 5:
         failure_text += f"\n\n还有 {len(failures) - 5} 个文件出错未显示。"
-    QMessageBox.warning(
-        None,
-        "处理完成",
-        f"本次设置：{_process_summary(options)}\n\n成功：{len(outputs)} 个\n已生成：\n{output_text}"
-        f"\n\n失败：{len(failures)} 个\n失败详情：\n{failure_text}",
+    return (
+        f"处理完成。本次设置：{_process_summary(options)} 成功：{len(outputs)} 个 "
+        f"失败：{len(failures)} 个 已生成：{output_text} 失败详情：{failure_text}"
     )
 
 

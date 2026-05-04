@@ -21,24 +21,25 @@ def download_file(url: str, output_path: str) -> None:
                 file.write(chunk)
 
 
-def run_url_download() -> None:
+def run_url_download() -> str:
     root = Tk()
     root.withdraw()
 
     url = simpledialog.askstring("下载文件", "请输入文件 URL：")
     if not url:
-        return
+        return "已取消：URL 下载。"
 
     parsed_name = Path(urlparse(url).path).name or "downloaded_file"
     output_path = filedialog.asksaveasfilename(title="保存为", initialfile=parsed_name)
     if not output_path:
-        return
+        return "已取消：URL 下载。"
 
     try:
         download_file(url, output_path)
-        messagebox.showinfo("完成", f"文件已下载：\n{output_path}")
+        return f"文件已下载：{output_path}"
     except Exception as exc:
         messagebox.showerror("下载失败", str(exc))
+        return f"URL 下载失败：{exc}"
 
 
 if __name__ == "__main__":

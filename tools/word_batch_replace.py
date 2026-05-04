@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QVBoxLayout,
 )
@@ -93,14 +94,26 @@ def replace_text_in_docx(docx_file, old_text, new_text):
 
 
 def search_and_replace(root_folder, old_text, new_text):
+    count = 0
     for root, dirs, files in os.walk(root_folder):
         for file in files:
             if file.endswith(".docx"):
                 docx_file = os.path.join(root, file)
                 try:
                     replace_text_in_docx(docx_file, old_text, new_text)
+                    count += 1
                 except Exception as e:
                     print(f"处理 {docx_file} 失败: {e}")
+    return count
+
+
+def _collect_docx_files(root_folder: str) -> list[str]:
+    matches = []
+    for root, _, files in os.walk(root_folder):
+        for file in files:
+            if file.endswith(".docx"):
+                matches.append(os.path.join(root, file))
+    return matches
 
 
 class _BatchReplaceDialog(QDialog):
@@ -137,6 +150,12 @@ class _BatchReplaceDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 1)
+        self._progress.setValue(0)
+        layout.addWidget(self._progress)
+        self._progress.hide()
+
     def _browse_folder(self):
         d = QFileDialog.getExistingDirectory(self, "选择文件夹")
         if d:
@@ -151,13 +170,23 @@ class _BatchReplaceDialog(QDialog):
     def new_text(self) -> str:
         return self._new_text.text()
 
+    def start_progress(self, maximum: int) -> None:
+        self._progress.setRange(0, max(1, maximum))
+        self._progress.setValue(0)
+        self.show()
+        QApplication.processEvents()
 
-def run_batch_replace():
+    def set_progress(self, value: int) -> None:
+        self._progress.setValue(value)
+        QApplication.processEvents()
+
+
+def run_batch_replace(progress_callback=None) -> str:
     app = QApplication.instance() or QApplication(sys.argv)
 
     dialog = _BatchReplaceDialog()
     if dialog.exec() != QDialog.Accepted:
-        return
+        return "已取消：Word 内容批量替换。"
 
     folder = dialog.folder()
     if not folder:
@@ -171,10 +200,19 @@ def run_batch_replace():
     new_text = dialog.new_text()
 
     try:
-        search_and_replace(folder, old_text, new_text)
-        QMessageBox.information(None, "完成", "Word 内容批量替换完成。")
+        files = _collect_docx_files(folder)
+        if progress_callback:
+            progress_callback(0, len(files))
+        processed = 0
+        for index, file_path in enumerate(files, start=1):
+            replace_text_in_docx(file_path, old_text, new_text)
+            processed += 1
+            if progress_callback:
+                progress_callback(index, len(files))
+        return f"Word 内容批量替换完成，共处理 {processed} 个文件。"
     except Exception as exc:
         QMessageBox.critical(None, "替换失败", str(exc))
+        return f"Word 内容批量替换失败：{exc}"
 
 
 if __name__ == "__main__":

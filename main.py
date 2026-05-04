@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import sys
 import traceback
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QLabel,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -40,35 +42,17 @@ PDF_TOOLS = [
         "已打开：PDF 转图片型 PDF（水印）。",
     ),
     ToolSpec("PDF → 每页导出 PNG/JPG", "pdf_to_pic.py", "run_pdf_to_images", "已打开：PDF 导出为图片。"),
-    ToolSpec(
-        "PDF → 图片型 PDF（居中浅水印）",
-        "pdf_to_image_pdf_hidden_watermark.py",
-        "run_pdf_hidden_watermark",
-        "已打开：PDF 居中浅水印。",
-    ),
 ]
 
 WORD_TOOLS = [
-    ToolSpec("Word 加水印（页眉居中底层，输出 docx）", "word_watermark.py", "run_word_watermark", "已打开 Word 加水印。"),
+    ToolSpec("Word 加水印（单行/多行/图片）", "word_watermark.py", "run_word_watermark", "已打开 Word 加水印。"),
     ToolSpec(
-        "Word 加公司 Logo 水印（居中底层，输出 _logo.docx）",
-        "word_logo_watermark.py",
-        "run_word_logo_watermark",
-        "已打开 Logo 水印。",
-    ),
-    ToolSpec("Word 内容批量替换", "word_batch_replace.py", "run_batch_replace", "已打开批量替换。"),
-    ToolSpec(
-        "Word → 图片型 PDF + 水印",
+        "Word → 图片型 PDF（无水印/单行/多行/图片水印）",
         "word_to_image_pdf_watermark.py",
-        "batch_convert_to_image_pdf",
-        "已打开 Word 转图片型 PDF（水印）。",
-    ),
-    ToolSpec(
-        "Word → 图片型 PDF（无水印）",
-        "word_to_graphic_pdf_v2.py",
         "batch_convert_to_image_pdf",
         "已打开 Word 转图片型 PDF。",
     ),
+    ToolSpec("Word 内容批量替换", "word_batch_replace.py", "run_batch_replace", "已打开批量替换。"),
 ]
 
 FILE_TOOLS = [
@@ -137,6 +121,12 @@ class MainWindow(QWidget):
         self.log.setMinimumHeight(160)
         layout.addWidget(self.log)
 
+        layout.addWidget(QLabel("进度"))
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        layout.addWidget(self.progress)
+
         self._log(f"主程序版本：{MAIN_VERSION}")
         self._log(f"工具目录：{TOOLS_DIR}")
 
@@ -159,8 +149,19 @@ class MainWindow(QWidget):
         layout.addStretch()
         return tab
 
+    def _reset_progress(self) -> None:
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        QApplication.processEvents()
+
+    def _update_progress(self, value: int, maximum: int) -> None:
+        self.progress.setRange(0, max(1, maximum))
+        self.progress.setValue(max(0, min(value, max(1, maximum))))
+        QApplication.processEvents()
+
     def _run_tool(self, spec: ToolSpec) -> None:
         self._log(f"调用：{spec.module_file} :: {spec.function_name}")
+        self._reset_progress()
         try:
             tool = load_tool(spec.module_file)
             loaded_path = Path(getattr(tool, "__file__", _tool_path(spec.module_file))).resolve()
@@ -175,8 +176,15 @@ class MainWindow(QWidget):
                 QMessageBox.warning(self, "调用失败", message)
                 return
 
-            fn()
-            self._log(spec.success_text)
+            if "progress_callback" in inspect.signature(fn).parameters:
+                result = fn(progress_callback=self._update_progress)
+            else:
+                result = fn()
+            if isinstance(result, str) and result.strip():
+                self._log(result)
+            else:
+                self._log(spec.success_text)
+            self._update_progress(1, 1)
         except Exception as exc:
             details = traceback.format_exc()
             self._log(f"调用失败：{exc}")

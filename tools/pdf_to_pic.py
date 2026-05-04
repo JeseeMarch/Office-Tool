@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 
 import fitz
 from PySide6.QtWidgets import (
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QRadioButton,
     QVBoxLayout,
@@ -20,7 +22,33 @@ from PySide6.QtWidgets import (
 )
 
 
-def export_pdf_pages(pdf_path: str, output_dir: str, image_format: str = "png", zoom: float = 2.0) -> int:
+TOOL_VERSION = "20260504-default-output-log"
+
+
+def _suggest_output_dir(files: list[str]) -> str:
+    if not files:
+        return ""
+
+    paths = [Path(file_path).resolve() for file_path in files]
+    if len(paths) == 1:
+        return str(paths[0].parent)
+
+    try:
+        common_dir = Path(os.path.commonpath([str(path.parent) for path in paths]))
+    except ValueError:
+        common_dir = paths[0].parent
+    return str(common_dir)
+
+
+def _pdf_output_dir(pdf_path: str, output_root: str) -> str:
+    pdf = Path(pdf_path).resolve()
+    root = Path(output_root).resolve()
+    return str(root / f"{pdf.stem}_images")
+
+
+def export_pdf_pages(pdf_path: str, output_root: str, image_format: str = "png", zoom: float = 2.0) -> int:
+    output_dir = _pdf_output_dir(pdf_path, output_root)
+    os.makedirs(output_dir, exist_ok=True)
     doc = fitz.open(pdf_path)
     matrix = fitz.Matrix(zoom, zoom)
     count = 0
@@ -29,7 +57,7 @@ def export_pdf_pages(pdf_path: str, output_dir: str, image_format: str = "png", 
         base_name = os.path.splitext(os.path.basename(pdf_path))[0]
         for index, page in enumerate(doc, start=1):
             pix = page.get_pixmap(matrix=matrix, alpha=False)
-            output_path = os.path.join(output_dir, f"{base_name}_page_{index:03d}.{image_format}")
+            output_path = os.path.join(output_dir, f"{base_name}_{index}.{image_format}")
             pix.save(output_path)
             count += 1
     finally:
@@ -98,6 +126,12 @@ class _PdfToPicDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 1)
+        self._progress.setValue(0)
+        layout.addWidget(self._progress)
+        self._progress.hide()
+
         self._file_list.model().rowsInserted.connect(self._update_file_count)
         self._file_list.model().rowsRemoved.connect(self._update_file_count)
 
@@ -107,6 +141,8 @@ class _PdfToPicDialog(QDialog):
         for f in files:
             if f not in existing:
                 self._file_list.addItem(f)
+        if files and not self._output_dir.text().strip():
+            self._output_dir.setText(_suggest_output_dir(self.selected_files()))
 
     def _remove_selected(self):
         for item in reversed(self._file_list.selectedItems()):
@@ -130,33 +166,46 @@ class _PdfToPicDialog(QDialog):
     def image_format(self) -> str:
         return "jpg" if self._fmt_group.checkedId() == 1 else "png"
 
+    def start_progress(self, maximum: int) -> None:
+        self._progress.setRange(0, max(1, maximum))
+        self._progress.setValue(0)
+        self.show()
+        QApplication.processEvents()
 
-def run_pdf_to_images() -> None:
+    def set_progress(self, value: int) -> None:
+        self._progress.setValue(value)
+        QApplication.processEvents()
+
+
+def run_pdf_to_images(progress_callback=None) -> str:
     app = QApplication.instance() or QApplication(sys.argv)
 
     dialog = _PdfToPicDialog()
     if dialog.exec() != QDialog.Accepted:
-        return
+        return "已取消：PDF 导出为图片。"
 
     files = dialog.selected_files()
     if not files:
-        QMessageBox.information(None, "提示", "未选择任何文件。")
-        return
+        return "未选择任何文件，未导出。"
 
     output_dir = dialog.output_dir()
     if not output_dir:
-        QMessageBox.warning(None, "提示", "未选择输出目录。")
-        return
+        output_dir = _suggest_output_dir(files)
+    output_dir = os.path.abspath(os.path.expanduser(output_dir))
 
     image_format = dialog.image_format()
 
-    try:
-        total = 0
-        for pdf_path in files:
-            total += export_pdf_pages(pdf_path, output_dir, image_format=image_format)
-        QMessageBox.information(None, "完成", f"已导出 {total} 张图片。")
-    except Exception as exc:
-        QMessageBox.critical(None, "导出失败", str(exc))
+    total = 0
+    output_dirs = []
+    if progress_callback:
+        progress_callback(0, len(files))
+    for index, pdf_path in enumerate(files, start=1):
+        total += export_pdf_pages(pdf_path, output_dir, image_format=image_format)
+        output_dirs.append(_pdf_output_dir(pdf_path, output_dir))
+        if progress_callback:
+            progress_callback(index, len(files))
+    message = f"已导出 {total} 张图片。\n输出文件夹：\n" + "\n".join(output_dirs)
+    return message.replace("\n", " ")
 
 
 if __name__ == "__main__":
