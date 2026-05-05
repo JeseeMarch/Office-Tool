@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -26,6 +25,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QSpinBox,
     QTextEdit,
     QVBoxLayout,
 )
@@ -47,6 +47,7 @@ class WatermarkOptions:
     kind: str
     text: str = ""
     image_path: str = ""
+    font_size: int = 96
 
 
 def _iter_unique_headers(doc: Document):
@@ -90,24 +91,48 @@ def _remove_existing_watermarks(header_element) -> None:
             header_element.remove(paragraph)
 
 
-def _text_watermark_xml(text: str, index: int, line_count: int) -> str:
+def _text_watermark_xml(
+    text: str,
+    row_index: int,
+    row_count: int,
+    font_size: int,
+    column_index: int = 0,
+    column_count: int = 1,
+) -> str:
     escaped_text = escape(text, {'"': "&quot;"})
-    top = -70 + index * 70 - (line_count - 1) * 35
+    line_step = max(60, int(font_size * 1.25))
+    top = -70 + row_index * line_step - (row_count - 1) * line_step // 2
+    left_offsets = {
+        1: [0],
+        2: [-145, 145],
+        3: [-190, 0, 190],
+    }
+    left = left_offsets.get(column_count, [0])[column_index]
+    watermark_id = f"{TEXT_WATERMARK_ID_PREFIX}{row_index}_{column_index}"
     return f"""<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
   xmlns:v="urn:schemas-microsoft-com:vml"
   xmlns:o="urn:schemas-microsoft-com:office:office"
   xmlns:w10="urn:schemas-microsoft-com:office:word">
   <w:r>
     <w:pict>
-      <v:shape id="{TEXT_WATERMARK_ID_PREFIX}{index}" o:spid="_x0000_s2050" type="#_x0000_t136"
-        style="position:absolute;margin-left:0;margin-top:{top}pt;width:420pt;height:120pt;rotation:315;z-index:-251654144;mso-position-horizontal:center;mso-position-horizontal-relative:page;mso-position-vertical:center;mso-position-vertical-relative:page"
+      <v:shape id="{watermark_id}" o:spid="_x0000_s2050" type="#_x0000_t136"
+        style="position:absolute;margin-left:{left}pt;margin-top:{top}pt;width:360pt;height:120pt;rotation:315;z-index:-251654144;mso-position-horizontal:center;mso-position-horizontal-relative:page;mso-position-vertical:center;mso-position-vertical-relative:page"
         fillcolor="#d8d8d8" stroked="f">
-        <v:textpath on="t" string="{escaped_text}" style="font-family:SimSun;font-size:44pt"/>
+        <v:textpath on="t" string="{escaped_text}" style="font-family:'Times New Roman','Source Han Sans SC','Source Han Sans','思源黑体';mso-fareast-font-family:'Source Han Sans SC';font-size:{font_size}pt"/>
         <w10:wrap anchorx="margin" anchory="margin"/>
       </v:shape>
     </w:pict>
   </w:r>
 </w:p>"""
+
+
+def _single_line_text(text: str) -> str:
+    text = text.replace("\\n", "\n")
+    return " ".join(part.strip() for part in text.splitlines() if part.strip())
+
+
+def _watermark_column_count(font_size: int) -> int:
+    return 2 if font_size >= 88 else 3
 
 
 def _prepare_image_watermark(src: Path) -> io.BytesIO:
@@ -151,15 +176,34 @@ def _image_watermark_xml(r_id: str, width_pt: float, height_pt: float) -> str:
 
 def add_watermark(doc: Document, options: WatermarkOptions) -> None:
     if options.kind in {"single_text", "multi_text"}:
-        lines = [line.strip() for line in options.text.splitlines() if line.strip()]
-        if options.kind == "single_text":
-            lines = lines[:1]
-        if not lines:
+        text = _single_line_text(options.text)
+        if not text:
             raise ValueError("未输入水印文字。")
+        if options.kind == "single_text":
+            lines = [text]
+            column_count = 1
+        else:
+            lines = [text, text, text]
+            column_count = _watermark_column_count(options.font_size)
         for header in _iter_unique_headers(doc):
             _remove_existing_watermarks(header._element)
-            for index, line in enumerate(lines):
-                header._element.insert(index, parse_xml(_text_watermark_xml(line, index, len(lines))))
+            insert_index = 0
+            for row_index, line in enumerate(lines):
+                for column_index in range(column_count):
+                    header._element.insert(
+                        insert_index,
+                        parse_xml(
+                            _text_watermark_xml(
+                                line,
+                                row_index,
+                                len(lines),
+                                options.font_size,
+                                column_index,
+                                column_count,
+                            )
+                        ),
+                    )
+                    insert_index += 1
         return
 
     if options.kind == "image":
@@ -191,7 +235,7 @@ class _WordWatermarkDialog(QDialog):
 
         file_row = QHBoxLayout()
         self._file_list = QListWidget()
-        self._file_list.setMinimumHeight(100)
+        self._file_list.setMinimumHeight(188)
         file_row.addWidget(self._file_list)
 
         btn_col = QVBoxLayout()
@@ -206,7 +250,7 @@ class _WordWatermarkDialog(QDialog):
         layout.addLayout(file_row)
 
         mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("水印类型："))
+        mode_row.addWidget(QLabel("输出模式："))
         self._mode_group = QButtonGroup(self)
         self._single_text = QRadioButton("单行水印")
         self._multi_text = QRadioButton("多行水印")
@@ -220,20 +264,31 @@ class _WordWatermarkDialog(QDialog):
         mode_row.addStretch()
         layout.addLayout(mode_row)
 
-        form = QFormLayout()
+        text_row = QHBoxLayout()
+        text_row.addWidget(QLabel("水印文字："))
         self._wm_text = QTextEdit("水印")
-        self._wm_text.setMaximumHeight(90)
-        form.addRow("水印文字：", self._wm_text)
+        self._wm_text.setMaximumHeight(86)
+        text_row.addWidget(self._wm_text)
+        layout.addLayout(text_row)
+
+        font_row = QHBoxLayout()
+        font_row.addWidget(QLabel("字体大小："))
+        self._font_size = QSpinBox()
+        self._font_size.setRange(8, 500)
+        self._font_size.setSingleStep(4)
+        self._font_size.setValue(96)
+        font_row.addWidget(self._font_size)
+        layout.addLayout(font_row)
 
         image_row = QHBoxLayout()
+        image_row.addWidget(QLabel("水印图片："))
         self._image_path = QLineEdit()
-        self._image_path.setPlaceholderText("选择图片水印文件…")
+        self._image_path.setPlaceholderText("选择图片水印文件...")
         image_btn = QPushButton("浏览")
         image_btn.clicked.connect(self._browse_image)
         image_row.addWidget(self._image_path)
         image_row.addWidget(image_btn)
-        form.addRow("水印图片：", image_row)
-        layout.addLayout(form)
+        layout.addLayout(image_row)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("确定")
@@ -279,8 +334,16 @@ class _WordWatermarkDialog(QDialog):
         if checked == 2:
             return WatermarkOptions(kind="image", image_path=self._image_path.text().strip())
         if checked == 1:
-            return WatermarkOptions(kind="multi_text", text=self._wm_text.toPlainText().strip())
-        return WatermarkOptions(kind="single_text", text=self._wm_text.toPlainText().strip())
+            return WatermarkOptions(
+                kind="multi_text",
+                text=self._wm_text.toPlainText().strip(),
+                font_size=self._font_size.value(),
+            )
+        return WatermarkOptions(
+            kind="single_text",
+            text=self._wm_text.toPlainText().strip(),
+            font_size=self._font_size.value(),
+        )
 
     def start_progress(self, maximum: int) -> None:
         self._progress.setRange(0, max(1, maximum))

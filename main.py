@@ -22,7 +22,15 @@ from PySide6.QtWidgets import (
 
 
 MAIN_VERSION = "20260503-clean"
-APP_DIR = Path(__file__).resolve().parent
+
+
+def _app_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    return Path(__file__).resolve().parent
+
+
+APP_DIR = _app_dir()
 TOOLS_DIR = APP_DIR / "tools"
 
 

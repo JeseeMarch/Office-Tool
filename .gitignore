@@ -5,9 +5,11 @@ __pycache__/
 # Build artifacts
 build/
 dist/
+package/
 
 # PyInstaller
 *.spec
+!Office_Tool.spec
 
 # OS
 .DS_Store

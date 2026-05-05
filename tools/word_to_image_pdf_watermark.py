@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from time import sleep
+from typing import NamedTuple
 
-from docx2pdf import convert
 from pdf2image import convert_from_path
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont
 from PySide6.QtWidgets import (
@@ -15,7 +16,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -41,13 +41,57 @@ class ImagePdfOptions:
     font_size: int = 96
 
 
-def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    for font_name in ("simsun.ttc", "simhei.ttf", "msyh.ttc"):
+class WatermarkFonts(NamedTuple):
+    cjk: ImageFont.FreeTypeFont | ImageFont.ImageFont
+    latin: ImageFont.FreeTypeFont | ImageFont.ImageFont
+
+
+def _cjk_font_candidates() -> list[str]:
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    fonts = Path(windir) / "Fonts"
+    candidates = [
+        str(fonts / "SourceHanSansSC-Regular.otf"),
+        str(fonts / "SourceHanSansCN-Regular.otf"),
+        str(fonts / "SourceHanSans-Regular.otf"),
+        str(fonts / "NotoSansCJK-Regular.ttc"),
+        str(fonts / "msyh.ttc"),
+        "SourceHanSansSC-Regular.otf",
+        "SourceHanSansCN-Regular.otf",
+        "SourceHanSans-Regular.otf",
+        "NotoSansCJK-Regular.ttc",
+        "msyh.ttc",
+    ]
+    if fonts.is_dir():
+        candidates.extend(str(path) for path in fonts.glob("SourceHanSans*"))
+        candidates.extend(str(path) for path in fonts.glob("Source Han Sans*"))
+    return candidates
+
+
+def _times_new_roman_candidates() -> list[str]:
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    fonts = Path(windir) / "Fonts"
+    return [
+        str(fonts / "times.ttf"),
+        str(fonts / "Times New Roman.ttf"),
+        "times.ttf",
+        "Times New Roman.ttf",
+    ]
+
+
+def _load_first_font(candidates: list[str], size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont | None:
+    for font_name in candidates:
         try:
             return ImageFont.truetype(font_name, size)
         except OSError:
-            pass
-    return ImageFont.load_default()
+            continue
+    return None
+
+
+def _load_watermark_fonts(size: int) -> WatermarkFonts:
+    fallback = ImageFont.load_default()
+    cjk = _load_first_font(_cjk_font_candidates(), size) or fallback
+    latin = _load_first_font(_times_new_roman_candidates(), size) or fallback
+    return WatermarkFonts(cjk=cjk, latin=latin)
 
 
 def _line_size(draw: ImageDraw.ImageDraw, text: str, font) -> tuple[int, int]:
@@ -55,33 +99,74 @@ def _line_size(draw: ImageDraw.ImageDraw, text: str, font) -> tuple[int, int]:
     return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 
+def _is_cjk(char: str) -> bool:
+    code = ord(char)
+    return (
+        0x3400 <= code <= 0x4DBF
+        or 0x4E00 <= code <= 0x9FFF
+        or 0x20000 <= code <= 0x2A6DF
+        or 0x2A700 <= code <= 0x2B73F
+        or 0x2B740 <= code <= 0x2B81F
+        or 0x2B820 <= code <= 0x2CEAF
+        or 0xF900 <= code <= 0xFAFF
+        or 0x2F800 <= code <= 0x2FA1F
+    )
+
+
+def _font_for_char(char: str, fonts: WatermarkFonts):
+    return fonts.cjk if _is_cjk(char) else fonts.latin
+
+
+def _char_width(draw: ImageDraw.ImageDraw, char: str, font) -> int:
+    if char == " ":
+        return max(1, int(round(draw.textlength(char, font=font))))
+    width, _ = _line_size(draw, char, font)
+    return max(1, width)
+
+
+def _mixed_line_size(draw: ImageDraw.ImageDraw, text: str, fonts: WatermarkFonts, font_size: int) -> tuple[int, int]:
+    width = sum(_char_width(draw, char, _font_for_char(char, fonts)) for char in text)
+    return max(1, width), max(1, int(font_size * 1.25))
+
+
+def _draw_mixed_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, fill, fonts: WatermarkFonts) -> None:
+    x, y = xy
+    for char in text:
+        font = _font_for_char(char, fonts)
+        draw.text((x, y), char, fill=fill, font=font)
+        x += _char_width(draw, char, font)
+
+
 def _split_watermark_lines(text: str) -> list[str]:
-    lines = []
-    for raw_line in text.replace("；", "\n").replace(";", "\n").splitlines():
-        line = raw_line.strip()
-        if line:
-            lines.append(line)
-    return lines
+    text = text.replace("\\n", "\n").replace("；", "\n").replace(";", "\n")
+    text = " ".join(part.strip() for part in text.splitlines() if part.strip())
+    return [text] if text else []
 
 
-def _make_rotated_text_image(text: str, font, opacity: float, angle: int) -> Image.Image:
+def _make_rotated_text_image(text: str, fonts: WatermarkFonts, font_size: int, opacity: float, angle: int) -> Image.Image:
     probe = Image.new("RGBA", (10, 10), (255, 255, 255, 0))
     probe_draw = ImageDraw.Draw(probe)
-    text_width, text_height = _line_size(probe_draw, text, font)
+    text_width, text_height = _mixed_line_size(probe_draw, text, fonts, font_size)
     padding = max(50, int(text_width * 0.25))
 
     tile = Image.new("RGBA", (text_width + padding * 2, text_height + padding * 2), (255, 255, 255, 0))
     draw = ImageDraw.Draw(tile)
     fill = (95, 95, 95, int(255 * opacity))
-    draw.text(((tile.width - text_width) // 2, (tile.height - text_height) // 2), text, fill=fill, font=font)
+    _draw_mixed_text(draw, ((tile.width - text_width) // 2, (tile.height - text_height) // 2), text, fill, fonts)
     return tile.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
 
 
-def _make_rotated_multiline_image(lines: list[str], font, opacity: float, angle: int) -> Image.Image:
+def _make_rotated_multiline_image(
+    lines: list[str],
+    fonts: WatermarkFonts,
+    font_size: int,
+    opacity: float,
+    angle: int,
+) -> Image.Image:
     probe = Image.new("RGBA", (10, 10), (255, 255, 255, 0))
     probe_draw = ImageDraw.Draw(probe)
-    line_sizes = [_line_size(probe_draw, line, font) for line in lines]
-    line_gap = max(4, int(font.size * 0.08)) if hasattr(font, "size") else 8
+    line_sizes = [_mixed_line_size(probe_draw, line, fonts, font_size) for line in lines]
+    line_gap = max(16, int(font_size * 0.35))
     text_width = max(width for width, _ in line_sizes)
     text_height = sum(height for _, height in line_sizes) + line_gap * (len(lines) - 1)
     padding = max(50, int(text_width * 0.25))
@@ -91,7 +176,7 @@ def _make_rotated_multiline_image(lines: list[str], font, opacity: float, angle:
     fill = (95, 95, 95, int(255 * opacity))
     y = padding
     for line, (line_width, line_height) in zip(lines, line_sizes):
-        draw.text(((tile.width - line_width) // 2, y), line, fill=fill, font=font)
+        _draw_mixed_text(draw, ((tile.width - line_width) // 2, y), line, fill, fonts)
         y += line_height + line_gap
     return tile.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
 
@@ -100,17 +185,19 @@ def _paste_centered(overlay: Image.Image, tile: Image.Image, center_x: int, cent
     overlay.alpha_composite(tile, (center_x - tile.width // 2, center_y - tile.height // 2))
 
 
+def _row_centers(tile_width: int, canvas_width: int) -> list[int]:
+    count = 2 if tile_width > canvas_width * 0.38 else 3
+    return [int(round(canvas_width * (index + 1) / (count + 1))) for index in range(count)]
+
+
 def _paste_centered_grid(overlay: Image.Image, tile: Image.Image) -> None:
-    center_x = overlay.width // 2
     center_y = overlay.height // 2
-    step_x = max(int(tile.width * 1.55), overlay.width // 3)
     step_y = max(int(tile.height * 1.55), overlay.height // 3)
-    x_offsets = [-step_x, 0, step_x]
     y_offsets = [-step_y, 0, step_y]
 
     for y_offset in y_offsets:
-        for x_offset in x_offsets:
-            _paste_centered(overlay, tile, center_x + x_offset, center_y + y_offset)
+        for center_x in _row_centers(tile.width, overlay.width):
+            _paste_centered(overlay, tile, center_x, center_y + y_offset)
 
 
 def _add_text_watermark(
@@ -128,14 +215,14 @@ def _add_text_watermark(
         lines = lines[:1]
 
     width, height = image.size
-    font = _load_font(font_size)
+    fonts = _load_watermark_fonts(font_size)
     overlay = Image.new("RGBA", image.size, (255, 255, 255, 0))
     if kind == "multi_text":
-        tile = _make_rotated_multiline_image(lines, font, opacity, angle)
+        tile = _make_rotated_multiline_image(lines, fonts, font_size, opacity, angle)
         _paste_centered_grid(overlay, tile)
     else:
         line = lines[0]
-        tile = _make_rotated_text_image(line, font, opacity, angle)
+        tile = _make_rotated_text_image(line, fonts, font_size, opacity, angle)
         _paste_centered(overlay, tile, width // 2, height // 2)
 
     return Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
@@ -173,27 +260,72 @@ def _add_image_watermark(image: Image.Image, image_path: str) -> Image.Image:
     return page.convert("RGB")
 
 
-def _safe_convert(input_file: str, output_file: str, retry: int = 3) -> bool:
+def _export_word_to_pdf(input_file: str, output_file: str) -> None:
+    import pythoncom
+    import win32com.client
+
+    input_path = str(Path(input_file).resolve())
+    output_path = str(Path(output_file).resolve())
+    word = None
+    doc = None
+    pythoncom.CoInitialize()
+    try:
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        doc = word.Documents.Open(
+            input_path,
+            ConfirmConversions=False,
+            ReadOnly=True,
+            AddToRecentFiles=False,
+            Visible=False,
+        )
+        doc.ExportAsFixedFormat(
+            OutputFileName=output_path,
+            ExportFormat=17,
+            OpenAfterExport=False,
+            OptimizeFor=0,
+            Range=0,
+            Item=0,
+            IncludeDocProps=True,
+            KeepIRM=True,
+            CreateBookmarks=1,
+            DocStructureTags=True,
+            BitmapMissingFonts=True,
+            UseISO19005_1=False,
+        )
+    finally:
+        if doc is not None:
+            doc.Close(False)
+        if word is not None:
+            word.Quit()
+        pythoncom.CoUninitialize()
+
+
+def _safe_convert(input_file: str, output_file: str, retry: int = 3) -> None:
+    last_error = None
     for attempt in range(retry):
         try:
-            convert(input_file, output_file)
-            return True
+            _export_word_to_pdf(input_file, output_file)
+            if Path(output_file).is_file() and Path(output_file).stat().st_size > 0:
+                return
+            last_error = RuntimeError("Word 未生成有效 PDF。")
         except Exception as exc:
-            print(f"尝试 {attempt + 1} 次失败：{exc}")
+            last_error = exc
             sleep(1)
-    return False
+    raise RuntimeError(f"Word 转 PDF 失败：{last_error}")
 
 
 def word_to_image_pdf(input_file: str, options: ImagePdfOptions) -> str:
     folder = os.path.dirname(input_file)
     name = os.path.splitext(os.path.basename(input_file))[0]
-    intermediate_pdf = os.path.join(folder, f"{name}_temp_{os.getpid()}.pdf")
+    fd, intermediate_pdf = tempfile.mkstemp(prefix=f"{name}_", suffix=".pdf")
+    os.close(fd)
+    os.remove(intermediate_pdf)
     output_pdf = os.path.join(folder, f"{name}_.pdf")
 
-    if not _safe_convert(input_file, intermediate_pdf):
-        raise RuntimeError(f"文件 {input_file} 转换失败。")
-
     try:
+        _safe_convert(input_file, intermediate_pdf)
         images = convert_from_path(intermediate_pdf)
         if options.watermark_kind in {"single_text", "multi_text"}:
             images = [
@@ -226,7 +358,7 @@ class _WordToImagePdfDialog(QDialog):
 
         file_row = QHBoxLayout()
         self._file_list = QListWidget()
-        self._file_list.setMinimumHeight(100)
+        self._file_list.setMinimumHeight(188)
         file_row.addWidget(self._file_list)
 
         btn_col = QVBoxLayout()
@@ -254,25 +386,31 @@ class _WordToImagePdfDialog(QDialog):
         mode_row.addStretch()
         layout.addLayout(mode_row)
 
-        form = QFormLayout()
+        text_row = QHBoxLayout()
+        text_row.addWidget(QLabel("水印文字："))
         self._wm_text = QTextEdit("水印")
-        self._wm_text.setMaximumHeight(90)
-        form.addRow("水印文字：", self._wm_text)
+        self._wm_text.setMaximumHeight(86)
+        text_row.addWidget(self._wm_text)
+        layout.addLayout(text_row)
+
+        font_row = QHBoxLayout()
+        font_row.addWidget(QLabel("字体大小："))
         self._font_size = QSpinBox()
-        self._font_size.setRange(48, 220)
+        self._font_size.setRange(8, 500)
         self._font_size.setSingleStep(4)
         self._font_size.setValue(96)
-        form.addRow("字体大小：", self._font_size)
+        font_row.addWidget(self._font_size)
+        layout.addLayout(font_row)
 
         image_row = QHBoxLayout()
+        image_row.addWidget(QLabel("水印图片："))
         self._image_path = QLineEdit()
-        self._image_path.setPlaceholderText("选择图片水印文件…")
+        self._image_path.setPlaceholderText("选择图片水印文件...")
         image_btn = QPushButton("浏览")
         image_btn.clicked.connect(self._browse_image)
         image_row.addWidget(self._image_path)
         image_row.addWidget(image_btn)
-        form.addRow("水印图片：", image_row)
-        layout.addLayout(form)
+        layout.addLayout(image_row)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("确定")

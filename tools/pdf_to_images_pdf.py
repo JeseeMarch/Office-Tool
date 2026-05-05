@@ -6,6 +6,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
 
 import fitz
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont
@@ -15,8 +16,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
-    QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -26,8 +25,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSpinBox,
+    QTextEdit,
     QVBoxLayout,
-    QWidget,
 )
 
 
@@ -53,6 +52,11 @@ class WatermarkOptions:
 @dataclass(frozen=True)
 class ProcessOptions:
     watermark: WatermarkOptions | None = None
+
+
+class WatermarkFonts(NamedTuple):
+    cjk: ImageFont.FreeTypeFont | ImageFont.ImageFont
+    latin: ImageFont.FreeTypeFont | ImageFont.ImageFont
 
 
 def _output_path(input_path: str) -> str:
@@ -167,25 +171,49 @@ def _resampling(name: str):
 def _font_candidates() -> list[str]:
     windir = os.environ.get("WINDIR", r"C:\Windows")
     fonts = Path(windir) / "Fonts"
-    return [
+    candidates = [
+        str(fonts / "SourceHanSansSC-Regular.otf"),
+        str(fonts / "SourceHanSansCN-Regular.otf"),
+        str(fonts / "SourceHanSans-Regular.otf"),
+        str(fonts / "NotoSansCJK-Regular.ttc"),
         str(fonts / "msyh.ttc"),
-        str(fonts / "simhei.ttf"),
-        str(fonts / "simsun.ttc"),
-        str(fonts / "arial.ttf"),
+        "SourceHanSansSC-Regular.otf",
+        "SourceHanSansCN-Regular.otf",
+        "SourceHanSans-Regular.otf",
+        "NotoSansCJK-Regular.ttc",
         "msyh.ttc",
-        "simhei.ttf",
-        "simsun.ttc",
-        "arial.ttf",
+    ]
+    if fonts.is_dir():
+        candidates.extend(str(path) for path in fonts.glob("SourceHanSans*"))
+        candidates.extend(str(path) for path in fonts.glob("Source Han Sans*"))
+    return candidates
+
+
+def _times_new_roman_candidates() -> list[str]:
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    fonts = Path(windir) / "Fonts"
+    return [
+        str(fonts / "times.ttf"),
+        str(fonts / "Times New Roman.ttf"),
+        "times.ttf",
+        "Times New Roman.ttf",
     ]
 
 
-def _load_font(font_size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    for font_name in _font_candidates():
+def _load_first_font(candidates: list[str], font_size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont | None:
+    for font_name in candidates:
         try:
             return ImageFont.truetype(font_name, font_size)
         except OSError:
             continue
-    return ImageFont.load_default()
+    return None
+
+
+def _load_watermark_fonts(font_size: int) -> WatermarkFonts:
+    fallback = ImageFont.load_default()
+    cjk = _load_first_font(_font_candidates(), font_size) or fallback
+    latin = _load_first_font(_times_new_roman_candidates(), font_size) or fallback
+    return WatermarkFonts(cjk=cjk, latin=latin)
 
 
 def _single_line_text(text: str) -> str:
@@ -193,9 +221,71 @@ def _single_line_text(text: str) -> str:
     return " ".join(part.strip() for part in text.splitlines() if part.strip())
 
 
+def _split_watermark_lines(text: str) -> list[str]:
+    text = _single_line_text(text.replace("；", "\n").replace(";", "\n"))
+    return [text] if text else []
+
+
 def _text_size(draw: ImageDraw.ImageDraw, text: str, font) -> tuple[int, int]:
     bbox = draw.textbbox((0, 0), text, font=font)
     return max(1, bbox[2] - bbox[0]), max(1, bbox[3] - bbox[1])
+
+
+def _is_cjk(char: str) -> bool:
+    code = ord(char)
+    return (
+        0x3400 <= code <= 0x4DBF
+        or 0x4E00 <= code <= 0x9FFF
+        or 0x20000 <= code <= 0x2A6DF
+        or 0x2A700 <= code <= 0x2B73F
+        or 0x2B740 <= code <= 0x2B81F
+        or 0x2B820 <= code <= 0x2CEAF
+        or 0xF900 <= code <= 0xFAFF
+        or 0x2F800 <= code <= 0x2FA1F
+    )
+
+
+def _font_for_char(char: str, fonts: WatermarkFonts):
+    return fonts.cjk if _is_cjk(char) else fonts.latin
+
+
+def _char_width(draw: ImageDraw.ImageDraw, char: str, font) -> int:
+    if char == " ":
+        return max(1, int(round(draw.textlength(char, font=font))))
+    width, _ = _text_size(draw, char, font)
+    return width
+
+
+def _mixed_text_size(draw: ImageDraw.ImageDraw, text: str, fonts: WatermarkFonts, font_size: int) -> tuple[int, int]:
+    width = sum(_char_width(draw, char, _font_for_char(char, fonts)) for char in text)
+    return max(1, width), max(1, int(font_size * 1.25))
+
+
+def _draw_mixed_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, fill, fonts: WatermarkFonts) -> None:
+    x, y = xy
+    for char in text:
+        font = _font_for_char(char, fonts)
+        draw.text((x, y), char, fill=fill, font=font)
+        x += _char_width(draw, char, font)
+
+
+def _make_text_tile(lines: list[str], fonts: WatermarkFonts, font_size: int) -> Image.Image:
+    probe = Image.new("RGBA", (1, 1), (255, 255, 255, 0))
+    probe_draw = ImageDraw.Draw(probe)
+    line_sizes = [_mixed_text_size(probe_draw, line, fonts, font_size) for line in lines]
+    line_gap = max(16, int(font_size * 0.35)) if len(lines) > 1 else 0
+    text_width = max(width for width, _ in line_sizes)
+    text_height = sum(height for _, height in line_sizes) + line_gap * (len(lines) - 1)
+
+    pad = max(12, font_size // 2)
+    tile = Image.new("RGBA", (text_width + pad * 2, text_height + pad * 2), (255, 255, 255, 0))
+    tile_draw = ImageDraw.Draw(tile)
+    fill = (0, 0, 0, TEXT_WATERMARK_ALPHA)
+    y = pad
+    for line, (line_width, line_height) in zip(lines, line_sizes):
+        _draw_mixed_text(tile_draw, ((tile.width - line_width) // 2, y), line, fill, fonts)
+        y += line_height + line_gap
+    return tile
 
 
 def _anchored_tile_positions(center: int, step: int, tile_size: int, canvas_size: int) -> list[int]:
@@ -214,6 +304,17 @@ def _anchored_tile_positions(center: int, step: int, tile_size: int, canvas_size
     return positions
 
 
+def _row_tile_positions(tile_size: int, canvas_size: int) -> list[int]:
+    if tile_size >= canvas_size:
+        return [(canvas_size - tile_size) // 2]
+
+    count = 2 if tile_size > canvas_size * 0.38 else 3
+    centers = [canvas_size * (index + 1) / (count + 1) for index in range(count)]
+    max_x = canvas_size - tile_size
+    positions = [int(round(min(max(center - tile_size / 2, 0), max_x))) for center in centers]
+    return sorted(set(positions))
+
+
 def _three_row_tile_positions(tile_size: int, canvas_size: int) -> list[int]:
     if tile_size >= canvas_size:
         return [(canvas_size - tile_size) // 2]
@@ -225,18 +326,15 @@ def _three_row_tile_positions(tile_size: int, canvas_size: int) -> list[int]:
 
 
 def add_text_watermark(image: Image.Image, options: WatermarkOptions) -> Image.Image:
-    text = _single_line_text(options.text)
-    font = _load_font(options.font_size)
+    if options.text_layout == "single":
+        lines = [_single_line_text(options.text)]
+    else:
+        lines = _split_watermark_lines(options.text)
+    if not lines or not lines[0]:
+        return image.convert("RGB")
 
-    probe = Image.new("RGBA", (1, 1), (255, 255, 255, 0))
-    probe_draw = ImageDraw.Draw(probe)
-    text_width, text_height = _text_size(probe_draw, text, font)
-
-    pad = max(12, options.font_size // 2)
-    tile = Image.new("RGBA", (text_width + pad * 2, text_height + pad * 2), (255, 255, 255, 0))
-    tile_draw = ImageDraw.Draw(tile)
-    fill = (0, 0, 0, TEXT_WATERMARK_ALPHA)
-    tile_draw.text((pad, pad), text, fill=fill, font=font)
+    fonts = _load_watermark_fonts(options.font_size)
+    tile = _make_text_tile(lines, fonts, options.font_size)
 
     tile = tile.rotate(45, expand=True, resample=_resampling("BICUBIC"))
     watermark = Image.new("RGBA", image.size, (255, 255, 255, 0))
@@ -247,10 +345,8 @@ def add_text_watermark(image: Image.Image, options: WatermarkOptions) -> Image.I
         watermark.alpha_composite(tile, (x, y))
         return Image.alpha_composite(image.convert("RGBA"), watermark).convert("RGB")
 
-    center_x = (image.width - tile.width) // 2
-    step_x = max(tile.width + options.font_size, options.font_size * 4)
     for y in _three_row_tile_positions(tile.height, image.height):
-        for x in _anchored_tile_positions(center_x, step_x, tile.width, image.width):
+        for x in _row_tile_positions(tile.width, image.width):
             watermark.alpha_composite(tile, (x, y))
 
     return Image.alpha_composite(image.convert("RGBA"), watermark).convert("RGB")
@@ -331,7 +427,7 @@ def convert_pdf_to_image_pdf(input_path: str, options: ProcessOptions | Watermar
 class PdfToImagePdfDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("PDF 转图片型 PDF")
+        self.setWindowTitle("PDF → 图片型 PDF")
         self.setMinimumWidth(560)
 
         root = QVBoxLayout(self)
@@ -341,7 +437,7 @@ class PdfToImagePdfDialog(QDialog):
 
         file_row = QHBoxLayout()
         self._file_list = QListWidget()
-        self._file_list.setMinimumHeight(120)
+        self._file_list.setMinimumHeight(188)
         file_row.addWidget(self._file_list)
 
         file_buttons = QVBoxLayout()
@@ -355,74 +451,48 @@ class PdfToImagePdfDialog(QDialog):
         file_row.addLayout(file_buttons)
         root.addLayout(file_row)
 
-        mode_box = QGroupBox("处理方式")
-        mode_layout = QVBoxLayout(mode_box)
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("输出模式："))
         self._mode_group = QButtonGroup(self)
-        self._no_watermark = QRadioButton("转为图片型 PDF（无水印）")
-        self._with_watermark = QRadioButton("添加水印")
+        self._no_watermark = QRadioButton("无水印")
+        self._single_line = QRadioButton("单行水印")
+        self._multi_line = QRadioButton("多行水印")
+        self._image_watermark = QRadioButton("图片水印")
         self._no_watermark.setChecked(True)
         self._mode_group.addButton(self._no_watermark, 0)
-        self._mode_group.addButton(self._with_watermark, 1)
-        mode_layout.addWidget(self._no_watermark)
-        mode_layout.addWidget(self._with_watermark)
-        root.addWidget(mode_box)
+        self._mode_group.addButton(self._single_line, 1)
+        self._mode_group.addButton(self._multi_line, 2)
+        self._mode_group.addButton(self._image_watermark, 3)
+        for button in (self._no_watermark, self._single_line, self._multi_line, self._image_watermark):
+            mode_row.addWidget(button)
+        mode_row.addStretch()
+        root.addLayout(mode_row)
 
-        self._watermark_box = QGroupBox("水印选项")
-        wm_root = QVBoxLayout(self._watermark_box)
+        text_row = QHBoxLayout()
+        text_row.addWidget(QLabel("水印文字："))
+        self._watermark_text = QTextEdit("水印")
+        self._watermark_text.setMaximumHeight(86)
+        text_row.addWidget(self._watermark_text)
+        root.addLayout(text_row)
 
-        wm_type_row = QHBoxLayout()
-        self._wm_type_group = QButtonGroup(self)
-        self._text_watermark = QRadioButton("文字水印")
-        self._image_watermark = QRadioButton("图片水印")
-        self._text_watermark.setChecked(True)
-        self._wm_type_group.addButton(self._text_watermark, 0)
-        self._wm_type_group.addButton(self._image_watermark, 1)
-        wm_type_row.addWidget(self._text_watermark)
-        wm_type_row.addWidget(self._image_watermark)
-        wm_type_row.addStretch()
-        wm_root.addLayout(wm_type_row)
-
-        self._text_panel = QWidget()
-        text_form = QFormLayout(self._text_panel)
-        text_form.setContentsMargins(0, 0, 0, 0)
-        self._watermark_text = QLineEdit("水印")
+        font_row = QHBoxLayout()
+        font_row.addWidget(QLabel("字体大小："))
         self._font_size = QSpinBox()
         self._font_size.setRange(8, 500)
-        self._font_size.setValue(72)
+        self._font_size.setSingleStep(4)
+        self._font_size.setValue(96)
+        font_row.addWidget(self._font_size)
+        root.addLayout(font_row)
 
-        self._layout_group = QButtonGroup(self)
-        self._single_line = QRadioButton("单行")
-        self._multi_line = QRadioButton("多行")
-        self._single_line.setChecked(True)
-        self._layout_group.addButton(self._single_line, 0)
-        self._layout_group.addButton(self._multi_line, 1)
-        layout_row = QHBoxLayout()
-        layout_row.addWidget(self._single_line)
-        layout_row.addWidget(self._multi_line)
-        layout_row.addStretch()
-        layout_widget = QWidget()
-        layout_widget.setLayout(layout_row)
-
-        text_form.addRow("水印文字：", self._watermark_text)
-        text_form.addRow("字号：", self._font_size)
-        text_form.addRow("排列：", layout_widget)
-        wm_root.addWidget(self._text_panel)
-
-        self._image_panel = QWidget()
-        image_row = QHBoxLayout(self._image_panel)
-        image_row.setContentsMargins(0, 0, 0, 0)
+        image_row = QHBoxLayout()
+        image_row.addWidget(QLabel("水印图片："))
         self._image_path = QLineEdit()
-        self._image_path.setPlaceholderText("选择水印图片...")
+        self._image_path.setPlaceholderText("选择图片水印文件...")
         browse_image = QPushButton("浏览")
         browse_image.clicked.connect(self._browse_image)
-        image_row.addWidget(QLabel("水印图片："))
         image_row.addWidget(self._image_path)
         image_row.addWidget(browse_image)
-        wm_root.addWidget(self._image_panel)
-
-        self._watermark_box.hide()
-        self._image_panel.hide()
-        root.addWidget(self._watermark_box)
+        root.addLayout(image_row)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("确定")
@@ -437,9 +507,6 @@ class PdfToImagePdfDialog(QDialog):
         root.addWidget(self._progress)
         self._progress.hide()
 
-        self._with_watermark.toggled.connect(self._watermark_box.setVisible)
-        self._text_watermark.toggled.connect(self._sync_watermark_panels)
-        self._image_watermark.toggled.connect(self._sync_watermark_panels)
         self._file_list.model().rowsInserted.connect(self._update_file_count)
         self._file_list.model().rowsRemoved.connect(self._update_file_count)
 
@@ -457,12 +524,6 @@ class PdfToImagePdfDialog(QDialog):
     def _update_file_count(self) -> None:
         self._file_count.setText(f"PDF 文件（{self._file_list.count()} 个已选）：")
 
-    def _sync_watermark_panels(self) -> None:
-        image_mode = self._image_watermark.isChecked()
-        self._text_panel.setVisible(not image_mode)
-        self._image_panel.setVisible(image_mode)
-        self.adjustSize()
-
     def _browse_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -472,6 +533,7 @@ class PdfToImagePdfDialog(QDialog):
         )
         if path:
             self._image_path.setText(path)
+            self._image_watermark.setChecked(True)
 
     def selected_files(self) -> list[str]:
         return [self._file_list.item(i).text() for i in range(self._file_list.count())]
@@ -485,7 +547,7 @@ class PdfToImagePdfDialog(QDialog):
 
         return WatermarkOptions(
             kind="text",
-            text=self._watermark_text.text().strip(),
+            text=self._watermark_text.toPlainText().strip(),
             font_size=self._font_size.value(),
             text_layout="multi" if self._multi_line.isChecked() else "single",
         )
