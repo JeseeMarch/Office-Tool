@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 
-TOOL_VERSION = "20260504-word-watermark-modes"
+TOOL_VERSION = "20260505-word-watermark-multi-vml-anchors"
 TEXT_WATERMARK_ID_PREFIX = "OfficeToolTextWatermark"
 IMAGE_WATERMARK_ID = "OfficeToolImageWatermark"
 LEGACY_IMAGE_WATERMARK_IDS = {"OfficeToolLogoVML"}
@@ -93,37 +93,52 @@ def _remove_existing_watermarks(header_element) -> None:
 
 def _text_watermark_xml(
     text: str,
-    row_index: int,
-    row_count: int,
     font_size: int,
-    column_index: int = 0,
-    column_count: int = 1,
+    left: int = 0,
+    top: int = -70,
+    watermark_index: int = 0,
 ) -> str:
-    escaped_text = escape(text, {'"': "&quot;"})
-    line_step = max(60, int(font_size * 1.25))
-    top = -70 + row_index * line_step - (row_count - 1) * line_step // 2
-    left_offsets = {
-        1: [0],
-        2: [-145, 145],
-        3: [-190, 0, 190],
-    }
-    left = left_offsets.get(column_count, [0])[column_index]
-    watermark_id = f"{TEXT_WATERMARK_ID_PREFIX}{row_index}_{column_index}"
     return f"""<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
   xmlns:v="urn:schemas-microsoft-com:vml"
   xmlns:o="urn:schemas-microsoft-com:office:office"
   xmlns:w10="urn:schemas-microsoft-com:office:word">
-  <w:r>
-    <w:pict>
-      <v:shape id="{watermark_id}" o:spid="_x0000_s2050" type="#_x0000_t136"
-        style="position:absolute;margin-left:{left}pt;margin-top:{top}pt;width:360pt;height:120pt;rotation:315;z-index:-251654144;mso-position-horizontal:center;mso-position-horizontal-relative:page;mso-position-vertical:center;mso-position-vertical-relative:page"
-        fillcolor="#d8d8d8" stroked="f">
-        <v:textpath on="t" string="{escaped_text}" style="font-family:'Times New Roman','Source Han Sans SC','Source Han Sans','思源黑体';mso-fareast-font-family:'Source Han Sans SC';font-size:{font_size}pt"/>
-        <w10:wrap anchorx="margin" anchory="margin"/>
-      </v:shape>
-    </w:pict>
-  </w:r>
+  {_text_watermark_run_xml(text, font_size, left, top, watermark_index)}
 </w:p>"""
+
+
+def _text_watermarks_xml(text: str, font_size: int, positions: list[tuple[int, int]]) -> str:
+    paragraphs = "\n".join(
+        _text_watermark_xml(text, font_size, left, top, watermark_index)
+        for watermark_index, (left, top) in enumerate(positions)
+    )
+    return f"""<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:v="urn:schemas-microsoft-com:vml"
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+  xmlns:w10="urn:schemas-microsoft-com:office:word">
+{paragraphs}
+</w:hdr>"""
+
+
+def _text_watermark_run_xml(text: str, font_size: int, left: int, top: int, watermark_index: int) -> str:
+    return f"""<w:r>
+    <w:pict>
+      {_text_watermark_shape_xml(text, font_size, left, top, watermark_index)}
+    </w:pict>
+  </w:r>"""
+
+
+def _text_watermark_shape_xml(text: str, font_size: int, left: int, top: int, watermark_index: int) -> str:
+    escaped_text = escape(text, {'"': "&quot;"})
+    watermark_id = f"{TEXT_WATERMARK_ID_PREFIX}{watermark_index}"
+    vml_font_size = _vml_text_font_size(font_size)
+    shape_width, shape_height = _text_watermark_shape_size(text, vml_font_size)
+    spid = 2050 + watermark_index
+    return f"""<v:shape id="{watermark_id}" o:spid="_x0000_s{spid}" type="#_x0000_t136"
+        style="position:absolute;margin-left:{left}pt;margin-top:{top}pt;width:{shape_width}pt;height:{shape_height}pt;rotation:315;z-index:-251654144;mso-position-horizontal:center;mso-position-horizontal-relative:page;mso-position-vertical:center;mso-position-vertical-relative:page"
+        fillcolor="#d8d8d8" stroked="f">
+        <v:textpath on="t" string="{escaped_text}" style="font-family:'Times New Roman','Source Han Sans SC','Source Han Sans','思源黑体';mso-fareast-font-family:'Source Han Sans SC';font-size:{vml_font_size}pt"/>
+        <w10:wrap anchorx="margin" anchory="margin"/>
+      </v:shape>"""
 
 
 def _single_line_text(text: str) -> str:
@@ -131,8 +146,54 @@ def _single_line_text(text: str) -> str:
     return " ".join(part.strip() for part in text.splitlines() if part.strip())
 
 
-def _watermark_column_count(font_size: int) -> int:
-    return 2 if font_size >= 88 else 3
+def _text_watermark_shape_size(text: str, font_size: int) -> tuple[int, int]:
+    cjk_count = sum(1 for char in text if _is_cjk(char))
+    other_count = len(text) - cjk_count
+    text_width = cjk_count * font_size + int(other_count * font_size * 0.58)
+    width = max(120, int(text_width + font_size * 1.5))
+    height = max(45, int(font_size * 1.4))
+    return width, height
+
+
+def _vml_text_font_size(font_size: int) -> int:
+    return max(8, int(round(font_size * 0.22)))
+
+
+def _is_cjk(char: str) -> bool:
+    code = ord(char)
+    return (
+        0x3400 <= code <= 0x4DBF
+        or 0x4E00 <= code <= 0x9FFF
+        or 0x20000 <= code <= 0x2A6DF
+        or 0x2A700 <= code <= 0x2B73F
+        or 0x2B740 <= code <= 0x2B81F
+        or 0x2B820 <= code <= 0x2CEAF
+        or 0xF900 <= code <= 0xFAFF
+        or 0x2F800 <= code <= 0x2FA1F
+    )
+
+
+def _multi_text_watermark_positions(font_size: int) -> list[tuple[int, int]]:
+    layout_font_size = _vml_text_font_size(font_size)
+    x_step = max(220, int(layout_font_size * 3.0))
+    y_step = max(125, int(layout_font_size * 1.8))
+    base_top = -70
+    positions = [(0, base_top)]
+
+    for column_index in (-1, 1):
+        left = column_index * x_step
+        if -420 <= left <= 420:
+            positions.append((left, base_top))
+
+    for row_offset in (-2, -1, 1, 2):
+        top = base_top + row_offset * y_step
+        start_left = -x_step // 2 if abs(row_offset) % 2 else 0
+        for column_index in range(-1, 2):
+            left = start_left + column_index * x_step
+            if -420 <= left <= 420:
+                positions.append((left, top))
+
+    return positions
 
 
 def _prepare_image_watermark(src: Path) -> io.BytesIO:
@@ -180,30 +241,14 @@ def add_watermark(doc: Document, options: WatermarkOptions) -> None:
         if not text:
             raise ValueError("未输入水印文字。")
         if options.kind == "single_text":
-            lines = [text]
-            column_count = 1
+            positions = [(0, -70)]
         else:
-            lines = [text, text, text]
-            column_count = _watermark_column_count(options.font_size)
+            positions = _multi_text_watermark_positions(options.font_size)
         for header in _iter_unique_headers(doc):
             _remove_existing_watermarks(header._element)
-            insert_index = 0
-            for row_index, line in enumerate(lines):
-                for column_index in range(column_count):
-                    header._element.insert(
-                        insert_index,
-                        parse_xml(
-                            _text_watermark_xml(
-                                line,
-                                row_index,
-                                len(lines),
-                                options.font_size,
-                                column_index,
-                                column_count,
-                            )
-                        ),
-                    )
-                    insert_index += 1
+            watermark_header = parse_xml(_text_watermarks_xml(text, options.font_size, positions))
+            for index, paragraph in enumerate(list(watermark_header)):
+                header._element.insert(index, paragraph)
         return
 
     if options.kind == "image":
@@ -329,6 +374,10 @@ class _WordWatermarkDialog(QDialog):
     def selected_files(self) -> list[str]:
         return [self._file_list.item(i).text() for i in range(self._file_list.count())]
 
+    def _font_size_value(self) -> int:
+        self._font_size.interpretText()
+        return self._font_size.value()
+
     def options(self) -> WatermarkOptions:
         checked = self._mode_group.checkedId()
         if checked == 2:
@@ -337,12 +386,12 @@ class _WordWatermarkDialog(QDialog):
             return WatermarkOptions(
                 kind="multi_text",
                 text=self._wm_text.toPlainText().strip(),
-                font_size=self._font_size.value(),
+                font_size=self._font_size_value(),
             )
         return WatermarkOptions(
             kind="single_text",
             text=self._wm_text.toPlainText().strip(),
-            font_size=self._font_size.value(),
+            font_size=self._font_size_value(),
         )
 
     def start_progress(self, maximum: int) -> None:
@@ -390,7 +439,8 @@ def run_word_watermark(progress_callback=None) -> str:
         QMessageBox.warning(None, "部分失败", "\n".join(failed))
     if outputs:
         message = "已生成：\n" + "\n".join(outputs)
-        return message.replace("\n", " ")
+        summary = f"本次设置：{options.kind}，字号 {options.font_size}。"
+        return f"{summary} {message.replace(chr(10), ' ')}"
     return "Word 加水印未生成文件。"
 
 

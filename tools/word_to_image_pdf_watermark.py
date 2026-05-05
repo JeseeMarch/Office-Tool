@@ -182,22 +182,63 @@ def _make_rotated_multiline_image(
 
 
 def _paste_centered(overlay: Image.Image, tile: Image.Image, center_x: int, center_y: int) -> None:
-    overlay.alpha_composite(tile, (center_x - tile.width // 2, center_y - tile.height // 2))
+    _paste_tile(overlay, tile, center_x - tile.width // 2, center_y - tile.height // 2)
 
 
-def _row_centers(tile_width: int, canvas_width: int) -> list[int]:
-    count = 2 if tile_width > canvas_width * 0.38 else 3
-    return [int(round(canvas_width * (index + 1) / (count + 1))) for index in range(count)]
+def _paste_tile(overlay: Image.Image, tile: Image.Image, x: int, y: int) -> None:
+    left = max(0, x)
+    top = max(0, y)
+    right = min(overlay.width, x + tile.width)
+    bottom = min(overlay.height, y + tile.height)
+    if left >= right or top >= bottom:
+        return
+
+    crop = tile.crop((left - x, top - y, right - x, bottom - y))
+    overlay.alpha_composite(crop, (left, top))
 
 
 def _paste_centered_grid(overlay: Image.Image, tile: Image.Image) -> None:
-    center_y = overlay.height // 2
-    step_y = max(int(tile.height * 1.55), overlay.height // 3)
-    y_offsets = [-step_y, 0, step_y]
+    step_x = max(int(tile.width * 1.35), int(overlay.width * 0.36))
+    step_y = max(int(tile.height * 1.12), int(overlay.height * 0.2))
+    center_x = (overlay.width - tile.width) // 2
+    center_y = (overlay.height - tile.height) // 2
 
-    for y_offset in y_offsets:
-        for center_x in _row_centers(tile.width, overlay.width):
-            _paste_centered(overlay, tile, center_x, center_y + y_offset)
+    _paste_tile(overlay, tile, center_x, center_y)
+
+    x = center_x - step_x
+    while x > -tile.width:
+        _paste_tile(overlay, tile, x, center_y)
+        x -= step_x
+    x = center_x + step_x
+    while x < overlay.width:
+        _paste_tile(overlay, tile, x, center_y)
+        x += step_x
+
+    row_offset = -1
+    while center_y + row_offset * step_y > -tile.height:
+        y = center_y + row_offset * step_y
+        x = center_x + (step_x // 2 if abs(row_offset) % 2 else 0)
+        while x > -tile.width:
+            _paste_tile(overlay, tile, x, y)
+            x -= step_x
+        x = center_x + (step_x // 2 if abs(row_offset) % 2 else 0) + step_x
+        while x < overlay.width:
+            _paste_tile(overlay, tile, x, y)
+            x += step_x
+        row_offset -= 1
+
+    row_offset = 1
+    while center_y + row_offset * step_y < overlay.height:
+        y = center_y + row_offset * step_y
+        x = center_x - (step_x // 2 if abs(row_offset) % 2 else 0)
+        while x > -tile.width:
+            _paste_tile(overlay, tile, x, y)
+            x -= step_x
+        x = center_x - (step_x // 2 if abs(row_offset) % 2 else 0) + step_x
+        while x < overlay.width:
+            _paste_tile(overlay, tile, x, y)
+            x += step_x
+        row_offset += 1
 
 
 def _add_text_watermark(
@@ -451,6 +492,10 @@ class _WordToImagePdfDialog(QDialog):
     def selected_files(self) -> list[str]:
         return [self._file_list.item(i).text() for i in range(self._file_list.count())]
 
+    def _font_size_value(self) -> int:
+        self._font_size.interpretText()
+        return self._font_size.value()
+
     def options(self) -> ImagePdfOptions:
         checked = self._mode_group.checkedId()
         if checked == 3:
@@ -459,11 +504,11 @@ class _WordToImagePdfDialog(QDialog):
             return ImagePdfOptions(
                 "multi_text",
                 text=self._wm_text.toPlainText().strip(),
-                font_size=self._font_size.value(),
+                font_size=self._font_size_value(),
             )
         if checked == 1:
             first_line = next(iter(_split_watermark_lines(self._wm_text.toPlainText())), "")
-            return ImagePdfOptions("single_text", text=first_line, font_size=self._font_size.value())
+            return ImagePdfOptions("single_text", text=first_line, font_size=self._font_size_value())
         return ImagePdfOptions("none")
 
     def start_progress(self, maximum: int) -> None:
@@ -520,7 +565,7 @@ def batch_convert_to_image_pdf(progress_callback=None) -> str:
         QMessageBox.warning(None, "部分失败", "\n".join(failed_files))
     if success_files:
         message = "已生成：\n" + "\n".join(success_files)
-        return message.replace("\n", " ")
+        return f"本次设置：{options.watermark_kind}，字号 {options.font_size}。 {message.replace(chr(10), ' ')}"
     return "Word 转图片型 PDF 未生成文件。"
 
 

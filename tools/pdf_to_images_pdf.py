@@ -216,6 +216,10 @@ def _load_watermark_fonts(font_size: int) -> WatermarkFonts:
     return WatermarkFonts(cjk=cjk, latin=latin)
 
 
+def _rendered_text_font_size(font_size: int) -> int:
+    return max(1, int(round(font_size * RENDER_ZOOM)))
+
+
 def _single_line_text(text: str) -> str:
     text = text.replace("\\n", "\n")
     return " ".join(part.strip() for part in text.splitlines() if part.strip())
@@ -288,41 +292,63 @@ def _make_text_tile(lines: list[str], fonts: WatermarkFonts, font_size: int) -> 
     return tile
 
 
-def _anchored_tile_positions(center: int, step: int, tile_size: int, canvas_size: int) -> list[int]:
-    positions = [center]
+def _paste_tile(watermark: Image.Image, tile: Image.Image, x: int, y: int) -> None:
+    left = max(0, x)
+    top = max(0, y)
+    right = min(watermark.width, x + tile.width)
+    bottom = min(watermark.height, y + tile.height)
+    if left >= right or top >= bottom:
+        return
 
-    pos = center - step
-    while pos > -tile_size:
-        positions.insert(0, pos)
-        pos -= step
+    crop = tile.crop((left - x, top - y, right - x, bottom - y))
+    watermark.alpha_composite(crop, (left, top))
 
-    pos = center + step
-    while pos < canvas_size + tile_size:
-        positions.append(pos)
-        pos += step
+
+def _staggered_tile_positions(tile_size: tuple[int, int], canvas_size: tuple[int, int]) -> list[tuple[int, int]]:
+    tile_width, tile_height = tile_size
+    canvas_width, canvas_height = canvas_size
+    step_x = max(int(tile_width * 1.35), int(canvas_width * 0.36))
+    step_y = max(int(tile_height * 1.12), int(canvas_height * 0.2))
+    center_x = (canvas_width - tile_width) // 2
+    center_y = (canvas_height - tile_height) // 2
+    positions = [(center_x, center_y)]
+
+    x = center_x - step_x
+    while x > -tile_width:
+        positions.append((x, center_y))
+        x -= step_x
+    x = center_x + step_x
+    while x < canvas_width:
+        positions.append((x, center_y))
+        x += step_x
+
+    row_offset = -1
+    while center_y + row_offset * step_y > -tile_height:
+        y = center_y + row_offset * step_y
+        x = center_x + (step_x // 2 if abs(row_offset) % 2 else 0)
+        while x > -tile_width:
+            positions.append((x, y))
+            x -= step_x
+        x = center_x + (step_x // 2 if abs(row_offset) % 2 else 0) + step_x
+        while x < canvas_width:
+            positions.append((x, y))
+            x += step_x
+        row_offset -= 1
+
+    row_offset = 1
+    while center_y + row_offset * step_y < canvas_height:
+        y = center_y + row_offset * step_y
+        x = center_x - (step_x // 2 if abs(row_offset) % 2 else 0)
+        while x > -tile_width:
+            positions.append((x, y))
+            x -= step_x
+        x = center_x - (step_x // 2 if abs(row_offset) % 2 else 0) + step_x
+        while x < canvas_width:
+            positions.append((x, y))
+            x += step_x
+        row_offset += 1
 
     return positions
-
-
-def _row_tile_positions(tile_size: int, canvas_size: int) -> list[int]:
-    if tile_size >= canvas_size:
-        return [(canvas_size - tile_size) // 2]
-
-    count = 2 if tile_size > canvas_size * 0.38 else 3
-    centers = [canvas_size * (index + 1) / (count + 1) for index in range(count)]
-    max_x = canvas_size - tile_size
-    positions = [int(round(min(max(center - tile_size / 2, 0), max_x))) for center in centers]
-    return sorted(set(positions))
-
-
-def _three_row_tile_positions(tile_size: int, canvas_size: int) -> list[int]:
-    if tile_size >= canvas_size:
-        return [(canvas_size - tile_size) // 2]
-
-    top = 0
-    center = (canvas_size - tile_size) // 2
-    bottom = canvas_size - tile_size
-    return sorted({top, center, bottom})
 
 
 def add_text_watermark(image: Image.Image, options: WatermarkOptions) -> Image.Image:
@@ -333,8 +359,9 @@ def add_text_watermark(image: Image.Image, options: WatermarkOptions) -> Image.I
     if not lines or not lines[0]:
         return image.convert("RGB")
 
-    fonts = _load_watermark_fonts(options.font_size)
-    tile = _make_text_tile(lines, fonts, options.font_size)
+    rendered_font_size = _rendered_text_font_size(options.font_size)
+    fonts = _load_watermark_fonts(rendered_font_size)
+    tile = _make_text_tile(lines, fonts, rendered_font_size)
 
     tile = tile.rotate(45, expand=True, resample=_resampling("BICUBIC"))
     watermark = Image.new("RGBA", image.size, (255, 255, 255, 0))
@@ -345,9 +372,8 @@ def add_text_watermark(image: Image.Image, options: WatermarkOptions) -> Image.I
         watermark.alpha_composite(tile, (x, y))
         return Image.alpha_composite(image.convert("RGBA"), watermark).convert("RGB")
 
-    for y in _three_row_tile_positions(tile.height, image.height):
-        for x in _row_tile_positions(tile.width, image.width):
-            watermark.alpha_composite(tile, (x, y))
+    for x, y in _staggered_tile_positions(tile.size, image.size):
+        _paste_tile(watermark, tile, x, y)
 
     return Image.alpha_composite(image.convert("RGBA"), watermark).convert("RGB")
 
@@ -538,6 +564,10 @@ class PdfToImagePdfDialog(QDialog):
     def selected_files(self) -> list[str]:
         return [self._file_list.item(i).text() for i in range(self._file_list.count())]
 
+    def _font_size_value(self) -> int:
+        self._font_size.interpretText()
+        return self._font_size.value()
+
     def watermark_options(self) -> WatermarkOptions | None:
         if self._no_watermark.isChecked():
             return None
@@ -548,7 +578,7 @@ class PdfToImagePdfDialog(QDialog):
         return WatermarkOptions(
             kind="text",
             text=self._watermark_text.toPlainText().strip(),
-            font_size=self._font_size.value(),
+            font_size=self._font_size_value(),
             text_layout="multi" if self._multi_line.isChecked() else "single",
         )
 
