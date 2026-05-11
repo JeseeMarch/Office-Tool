@@ -3,7 +3,7 @@
 from importlib.util import find_spec
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
 block_cipher = None
@@ -21,6 +21,7 @@ hiddenimports += optional_hiddenimports(
     "bs4",
     "docx",
     "fitz",
+    "imageio_ffmpeg",
     "markdown",
     "pdf2image",
     "pydub",
@@ -37,6 +38,7 @@ a = Analysis(
     pathex=[str(project_dir)],
     binaries=[],
     datas=[
+        *collect_data_files("imageio_ffmpeg"),
         (str(project_dir / "tools"), "tools"),
         (str(project_dir / "assets"), "assets"),
     ],

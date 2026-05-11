@@ -1,5 +1,6 @@
 import os
 import sys
+import warnings
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -8,13 +9,39 @@ from PySide6.QtWidgets import (
 )
 
 
-def convert_wav_to_mp3(input_path: str) -> str:
+def _load_audio_segment():
     try:
-        from pydub import AudioSegment
+        import imageio_ffmpeg
     except ModuleNotFoundError as exc:
-        raise RuntimeError("缺少音频转换依赖，请先安装：pip install pydub，并确保 ffmpeg 可用。") from exc
+        raise RuntimeError(
+            "缺少 ffmpeg，请先安装：pip install imageio-ffmpeg"
+        ) from exc
 
+    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+    if not os.path.exists(ffmpeg_path):
+        raise RuntimeError(f"找不到 ffmpeg 可执行文件：{ffmpeg_path}")
+
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="Couldn't find ffmpeg or avconv.*",
+                category=RuntimeWarning,
+            )
+            from pydub import AudioSegment
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "缺少音频转换依赖，请先安装：pip install pydub imageio-ffmpeg"
+        ) from exc
+
+    AudioSegment.converter = ffmpeg_path
+    AudioSegment.ffmpeg = ffmpeg_path
+    return AudioSegment
+
+
+def convert_wav_to_mp3(input_path: str) -> str:
     output_path = os.path.splitext(input_path)[0] + ".mp3"
+    AudioSegment = _load_audio_segment()
     audio = AudioSegment.from_wav(input_path)
     audio.export(output_path, format="mp3")
     return output_path
