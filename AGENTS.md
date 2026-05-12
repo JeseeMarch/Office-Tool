@@ -1,26 +1,26 @@
 # AGENTS.md
 
-## 工作方式
+## Workflow
 
-- 修改前先判断任务目标，优先做最小必要修改。
-- 不编辑无关文件。
-- 不做不必要的大重构。
-- 保持现有行为，除非任务明确要求改变。
-- 添加新依赖前先询问我。
-- 不要假装运行过未实际运行的命令。
+- Before making changes, assess the task objective; prioritize making only the minimum necessary modifications.
+- Do not edit unrelated files.
+- Avoid unnecessary, large-scale refactoring.
+- Preserve existing behavior unless the task explicitly requires a change.
+- Ask me before adding new dependencies.
+- Do not claim to have executed commands that were not actually run.
 
-## Python 项目规则
+## Python Project Rules
 
-- 优先遵循项目现有代码风格。
-- 修改业务逻辑后，优先运行项目已有测试命令。
-- 如果项目使用 pytest，运行 `python -m pytest`。
-- 如果项目使用 uv，优先运行 `uv run pytest`。
-- 如果测试命令不可用，说明原因，并给出人工验证方式。
-- 不要把 Node.js 项目的命令，例如 `npm test`，默认套用到 Python 项目。
+- Prioritize adhering to the project's existing code style.
+- After modifying business logic, prioritize running the project's existing test commands.
+- If the project uses `pytest`, run `python -m pytest`.
+- If the project uses `uv`, prioritize running `uv run pytest`.
+- If test commands are unavailable, explain why and provide instructions for manual verification.
+- Do not automatically apply Node.js project commands—such as `npm test`—to Python projects by default.
 
-## 输出要求
+## Output Requirements
 
-- 简洁说明修改了什么。
-- 说明是否运行了测试。
-- 如果没有运行测试，说明原因。
-- 标出可能的风险或需要我确认的地方。
+- Briefly explain what changes were made.
+- Indicate whether tests were executed.
+- If tests were not executed, explain the reason.
+- Highlight any potential risks or areas requiring my confirmation.

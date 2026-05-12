@@ -50,6 +50,9 @@ PDF_TOOLS = [
         "已打开：PDF 转图片型 PDF（水印）。",
     ),
     ToolSpec("PDF → 每页导出 PNG/JPG", "pdf_to_pic.py", "run_pdf_to_images", "已打开：PDF 导出为图片。"),
+    ToolSpec("PDF 分割（每页 / 每N页 / 自定义范围）", "pdf_split.py", "run_pdf_split", "已打开：PDF 分割。"),
+    ToolSpec("PDF 页面提取（指定页码或范围）", "pdf_extract.py", "run_pdf_extract", "已打开：PDF 页面提取。"),
+    ToolSpec("PDF 合并（多文件按序合并为一）", "pdf_merge.py", "run_pdf_merge", "已打开：PDF 合并。"),
 ]
 
 WORD_TOOLS = [
