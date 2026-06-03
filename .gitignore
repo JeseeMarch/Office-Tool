@@ -11,6 +11,9 @@ package/
 *.spec
 !Office_Tool.spec
 
+# CodeGraph index
+.codegraph/
+
 # OS
 .DS_Store
 Thumbs.db

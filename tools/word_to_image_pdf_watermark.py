@@ -38,7 +38,7 @@ class ImagePdfOptions:
     watermark_kind: str
     text: str = ""
     image_path: str = ""
-    font_size: int = 96
+    font_size: int = 72
 
 
 class WatermarkFonts(NamedTuple):
@@ -162,7 +162,7 @@ def _make_rotated_multiline_image(
     font_size: int,
     opacity: float,
     angle: int,
-) -> Image.Image:
+) -> tuple[Image.Image, int, int]:
     probe = Image.new("RGBA", (10, 10), (255, 255, 255, 0))
     probe_draw = ImageDraw.Draw(probe)
     line_sizes = [_mixed_line_size(probe_draw, line, fonts, font_size) for line in lines]
@@ -178,7 +178,8 @@ def _make_rotated_multiline_image(
     for line, (line_width, line_height) in zip(lines, line_sizes):
         _draw_mixed_text(draw, ((tile.width - line_width) // 2, y), line, fill, fonts)
         y += line_height + line_gap
-    return tile.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
+    rotated = tile.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
+    return rotated, text_width, text_height
 
 
 def _paste_centered(overlay: Image.Image, tile: Image.Image, center_x: int, center_y: int) -> None:
@@ -197,9 +198,9 @@ def _paste_tile(overlay: Image.Image, tile: Image.Image, x: int, y: int) -> None
     overlay.alpha_composite(crop, (left, top))
 
 
-def _paste_centered_grid(overlay: Image.Image, tile: Image.Image) -> None:
-    step_x = max(int(tile.width * 1.35), int(overlay.width * 0.36))
-    step_y = max(int(tile.height * 1.12), int(overlay.height * 0.2))
+def _paste_centered_grid(overlay: Image.Image, tile: Image.Image, step_x: int, step_y: int) -> None:
+    step_x = max(1, step_x)
+    step_y = max(1, step_y)
     center_x = (overlay.width - tile.width) // 2
     center_y = (overlay.height - tile.height) // 2
 
@@ -259,8 +260,9 @@ def _add_text_watermark(
     fonts = _load_watermark_fonts(font_size)
     overlay = Image.new("RGBA", image.size, (255, 255, 255, 0))
     if kind == "multi_text":
-        tile = _make_rotated_multiline_image(lines, fonts, font_size, opacity, angle)
-        _paste_centered_grid(overlay, tile)
+        tile, text_width, text_height = _make_rotated_multiline_image(lines, fonts, font_size, opacity, angle)
+        # 同行内水印间距 = 水印长度的 1 倍 → 步长 = 2×文字宽；行间距 1.5 倍 → 步长 = 1.5×文字高。
+        _paste_centered_grid(overlay, tile, int(text_width * 2.0), int(text_height * 1.5))
     else:
         line = lines[0]
         tile = _make_rotated_text_image(line, fonts, font_size, opacity, angle)
@@ -439,7 +441,7 @@ class _WordToImagePdfDialog(QDialog):
         self._font_size = QSpinBox()
         self._font_size.setRange(8, 500)
         self._font_size.setSingleStep(4)
-        self._font_size.setValue(96)
+        self._font_size.setValue(72)
         font_row.addWidget(self._font_size)
         layout.addLayout(font_row)
 

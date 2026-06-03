@@ -273,7 +273,7 @@ def _draw_mixed_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, 
         x += _char_width(draw, char, font)
 
 
-def _make_text_tile(lines: list[str], fonts: WatermarkFonts, font_size: int) -> Image.Image:
+def _make_text_tile(lines: list[str], fonts: WatermarkFonts, font_size: int) -> tuple[Image.Image, int, int]:
     probe = Image.new("RGBA", (1, 1), (255, 255, 255, 0))
     probe_draw = ImageDraw.Draw(probe)
     line_sizes = [_mixed_text_size(probe_draw, line, fonts, font_size) for line in lines]
@@ -289,7 +289,7 @@ def _make_text_tile(lines: list[str], fonts: WatermarkFonts, font_size: int) -> 
     for line, (line_width, line_height) in zip(lines, line_sizes):
         _draw_mixed_text(tile_draw, ((tile.width - line_width) // 2, y), line, fill, fonts)
         y += line_height + line_gap
-    return tile
+    return tile, text_width, text_height
 
 
 def _paste_tile(watermark: Image.Image, tile: Image.Image, x: int, y: int) -> None:
@@ -304,11 +304,16 @@ def _paste_tile(watermark: Image.Image, tile: Image.Image, x: int, y: int) -> No
     watermark.alpha_composite(crop, (left, top))
 
 
-def _staggered_tile_positions(tile_size: tuple[int, int], canvas_size: tuple[int, int]) -> list[tuple[int, int]]:
+def _staggered_tile_positions(
+    tile_size: tuple[int, int],
+    canvas_size: tuple[int, int],
+    step_x: int,
+    step_y: int,
+) -> list[tuple[int, int]]:
     tile_width, tile_height = tile_size
     canvas_width, canvas_height = canvas_size
-    step_x = max(int(tile_width * 1.35), int(canvas_width * 0.36))
-    step_y = max(int(tile_height * 1.12), int(canvas_height * 0.2))
+    step_x = max(1, step_x)
+    step_y = max(1, step_y)
     center_x = (canvas_width - tile_width) // 2
     center_y = (canvas_height - tile_height) // 2
     positions = [(center_x, center_y)]
@@ -361,7 +366,7 @@ def add_text_watermark(image: Image.Image, options: WatermarkOptions) -> Image.I
 
     rendered_font_size = _rendered_text_font_size(options.font_size)
     fonts = _load_watermark_fonts(rendered_font_size)
-    tile = _make_text_tile(lines, fonts, rendered_font_size)
+    tile, text_width, text_height = _make_text_tile(lines, fonts, rendered_font_size)
 
     tile = tile.rotate(45, expand=True, resample=_resampling("BICUBIC"))
     watermark = Image.new("RGBA", image.size, (255, 255, 255, 0))
@@ -372,7 +377,11 @@ def add_text_watermark(image: Image.Image, options: WatermarkOptions) -> Image.I
         watermark.alpha_composite(tile, (x, y))
         return Image.alpha_composite(image.convert("RGBA"), watermark).convert("RGB")
 
-    for x, y in _staggered_tile_positions(tile.size, image.size):
+    # 间距以水印文字本身的尺寸为准（不含留白/旋转放大）：
+    # 同行内水印间距 = 水印长度的 1 倍 → 步长 = 2×文字宽；行间距 1.5 倍 → 步长 = 1.5×文字高。
+    step_x = int(text_width * 2.0)
+    step_y = int(text_height * 1.5)
+    for x, y in _staggered_tile_positions(tile.size, image.size, step_x, step_y):
         _paste_tile(watermark, tile, x, y)
 
     return Image.alpha_composite(image.convert("RGBA"), watermark).convert("RGB")
@@ -506,7 +515,7 @@ class PdfToImagePdfDialog(QDialog):
         self._font_size = QSpinBox()
         self._font_size.setRange(8, 500)
         self._font_size.setSingleStep(4)
-        self._font_size.setValue(96)
+        self._font_size.setValue(72)
         font_row.addWidget(self._font_size)
         root.addLayout(font_row)
 
@@ -622,20 +631,20 @@ def process_pdf(progress_callback=None) -> str:
             QMessageBox.No,
         )
         if choice != QMessageBox.Yes:
-            return
+            return "已取消：未确认输入文件。"
 
     options = dialog.process_options()
     watermark = options.watermark
     if watermark and watermark.kind == "text" and not watermark.text:
         QMessageBox.warning(None, "提示", "未输入水印内容。")
-        return
+        return "未输入水印内容，未处理。"
     if watermark and watermark.kind == "image":
         if not watermark.image_path:
             QMessageBox.warning(None, "提示", "未选择水印图片。")
-            return
+            return "未选择水印图片，未处理。"
         if not os.path.exists(watermark.image_path):
             QMessageBox.warning(None, "提示", "水印图片不存在。")
-            return
+            return "水印图片不存在，未处理。"
 
     outputs: list[str] = []
     failures: list[str] = []

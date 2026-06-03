@@ -1,0 +1,29 @@
+# Office Tool 运行依赖
+# 安装：python -m pip install -r requirements.txt
+# 版本按当前开发环境锁定（Python 3.12, Windows）。
+
+# GUI 主框架（部分旧工具另用标准库 tkinter，无需安装）
+PySide6==6.11.0
+
+# PDF 处理
+PyMuPDF==1.25.1          # import fitz：转图片型 PDF、分割、提取、合并、导出图片
+PyPDF2==3.0.1            # PDF 密码暴力尝试
+pdf2image==1.17.0        # Word 转图片型 PDF；需额外安装 Poppler 并加入 PATH
+
+# Word / 文档
+python-docx==1.1.2       # import docx：水印、批量替换、目录树导出
+Markdown==3.10.2         # Markdown → Word（在工具内惰性导入，未装则该工具不可用）
+beautifulsoup4==4.12.3   # 解析 Markdown 转出的 HTML
+
+# 图像
+Pillow==10.4.0           # import PIL：水印渲染
+
+# 音频（WAV → MP3）
+pydub==0.25.1
+imageio-ffmpeg==0.6.0    # 提供打包内置的 ffmpeg 可执行文件
+
+# 网络
+requests==2.32.3         # 按 URL 下载文件
+
+# Windows 专用（Word 转 PDF 走 COM 调用 Word）
+pywin32==306 ; sys_platform == "win32"   # import win32com.client / pythoncom

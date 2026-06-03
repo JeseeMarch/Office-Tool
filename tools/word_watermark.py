@@ -47,7 +47,7 @@ class WatermarkOptions:
     kind: str
     text: str = ""
     image_path: str = ""
-    font_size: int = 96
+    font_size: int = 72
 
 
 def _iter_unique_headers(doc: Document):
@@ -173,10 +173,11 @@ def _is_cjk(char: str) -> bool:
     )
 
 
-def _multi_text_watermark_positions(font_size: int) -> list[tuple[int, int]]:
-    layout_font_size = _vml_text_font_size(font_size)
-    x_step = max(220, int(layout_font_size * 3.0))
-    y_step = max(125, int(layout_font_size * 1.8))
+def _multi_text_watermark_positions(text: str, font_size: int) -> list[tuple[int, int]]:
+    vml_font_size = _vml_text_font_size(font_size)
+    shape_width, shape_height = _text_watermark_shape_size(text, vml_font_size)
+    x_step = max(120, int(shape_width * 2.0))   # 同行内水印间距 = 水印长度的 1 倍
+    y_step = max(80, int(shape_height * 1.5))   # 行间距 1.5 倍
     base_top = -70
     positions = [(0, base_top)]
 
@@ -243,7 +244,7 @@ def add_watermark(doc: Document, options: WatermarkOptions) -> None:
         if options.kind == "single_text":
             positions = [(0, -70)]
         else:
-            positions = _multi_text_watermark_positions(options.font_size)
+            positions = _multi_text_watermark_positions(text, options.font_size)
         for header in _iter_unique_headers(doc):
             _remove_existing_watermarks(header._element)
             watermark_header = parse_xml(_text_watermarks_xml(text, options.font_size, positions))
@@ -321,7 +322,7 @@ class _WordWatermarkDialog(QDialog):
         self._font_size = QSpinBox()
         self._font_size.setRange(8, 500)
         self._font_size.setSingleStep(4)
-        self._font_size.setValue(96)
+        self._font_size.setValue(72)
         font_row.addWidget(self._font_size)
         layout.addLayout(font_row)
 

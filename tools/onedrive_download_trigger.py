@@ -1,25 +1,28 @@
 import os
 from tkinter import Tk, filedialog
 
-def touch_file(file_path):
+def touch_file(file_path) -> bool:
     """
-    尝试读取文件第一个字节，触发 OneDrive 下载
+    尝试读取文件第一个字节，触发 OneDrive 下载。
+    成功读取返回 True，否则返回 False。
     """
     try:
         with open(file_path, 'rb') as f:
             f.read(1)           # 只读一个字节就够了
         print(f"已触发下载: {file_path}")
+        return True
     except FileNotFoundError:
         print(f"文件尚未下载（占位符）: {file_path}")
     except PermissionError:
         print(f"权限问题，跳过: {file_path}")
     except Exception as e:
         print(f"访问失败: {file_path} → {e}")
+    return False
 
-def download_onedrive_files(root_folder):
+def download_onedrive_files(root_folder) -> tuple[int, int]:
     if not os.path.isdir(root_folder):
         print("错误：这不是一个有效的文件夹")
-        return
+        return 0, 0
 
     print(f"\n开始扫描文件夹：{root_folder}")
     print("正在遍历文件...（可能需要几秒到几分钟，取决于文件数量）\n")
@@ -34,8 +37,7 @@ def download_onedrive_files(root_folder):
             # 可以在这里加过滤，例如跳过某些文件类型
             # if file.lower().endswith(('.url', '.lnk', 'thumbs.db')): continue
 
-            touch_file(file_path)
-            if "已触发下载" in "已触发下载":  # 简单计数，实际可优化
+            if touch_file(file_path):
                 triggered += 1
 
             # 每处理 200 个文件给一次反馈（避免太安静）
@@ -46,6 +48,7 @@ def download_onedrive_files(root_folder):
     print(f"总文件数：{count}")
     print(f"成功触发下载的文件：{triggered}")
     print(f"其他文件可能是已下载、权限问题或占位符")
+    return count, triggered
 
 def main():
     print("=== OneDrive 文件按需下载触发工具 ===\n")
@@ -77,12 +80,14 @@ def main():
     input("\n按 Enter 键退出...")
 
 
-def run_onedrive_download_trigger():
+def run_onedrive_download_trigger() -> str:
     root = Tk()
     root.withdraw()
     folder = filedialog.askdirectory(title="选择 OneDrive 文件夹")
-    if folder:
-        download_onedrive_files(folder)
+    if not folder:
+        return "已取消：OneDrive 下载触发。"
+    count, triggered = download_onedrive_files(folder)
+    return f"扫描完成：共 {count} 个文件，成功触发下载 {triggered} 个。详见控制台输出。"
 
 
 if __name__ == "__main__":

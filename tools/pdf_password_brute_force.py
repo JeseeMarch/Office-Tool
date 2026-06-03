@@ -37,7 +37,7 @@ def brute_force_pdf_password(pdf_path, max_length=4):
     except Exception as e:
         print(f"An error occurred: {e}")
 
-def run_pdf_password_brute_force():
+def run_pdf_password_brute_force() -> str:
     root = Tk()
     root.withdraw()
 

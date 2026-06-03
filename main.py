@@ -7,6 +7,7 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -22,6 +23,117 @@ from PySide6.QtWidgets import (
 
 
 MAIN_VERSION = "20260503-clean"
+
+
+# 清爷浅色主题：白/浅灰背景 + 蓝色联动色，Fluent 风格圆角。
+STYLE_SHEET = """
+* {
+    font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    font-size: 10pt;
+    color: #1f2733;
+}
+QWidget {
+    background-color: #f4f6fb;
+}
+QTabWidget::pane {
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #ffffff;
+    top: -1px;
+}
+QTabBar::tab {
+    background: transparent;
+    color: #64748b;
+    padding: 8px 22px;
+    margin-right: 4px;
+    border: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    font-weight: 600;
+}
+QTabBar::tab:hover {
+    color: #2563eb;
+    background: #eef2ff;
+}
+QTabBar::tab:selected {
+    color: #2563eb;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-bottom: 2px solid #2563eb;
+}
+QScrollArea {
+    border: none;
+    background: transparent;
+}
+QPushButton {
+    background: #ffffff;
+    border: 1px solid #d7deea;
+    border-radius: 8px;
+    padding: 11px 16px;
+    text-align: left;
+    color: #1f2733;
+}
+QPushButton:hover {
+    background: #eff4ff;
+    border-color: #2563eb;
+    color: #1d4ed8;
+}
+QPushButton:pressed {
+    background: #dbe6ff;
+    border-color: #1d4ed8;
+}
+QLabel {
+    background: transparent;
+    color: #475569;
+    font-weight: 600;
+}
+QLabel#headerTitle {
+    color: #0f172a;
+    font-size: 17pt;
+    font-weight: 700;
+}
+QLabel#headerSubtitle {
+    color: #94a3b8;
+    font-size: 9pt;
+    font-weight: 500;
+}
+QTextEdit {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 8px;
+    color: #334155;
+    selection-background-color: #bfdbfe;
+}
+QProgressBar {
+    background: #e9eef6;
+    border: none;
+    border-radius: 7px;
+    height: 14px;
+    text-align: center;
+    color: #475569;
+}
+QProgressBar::chunk {
+    background: #2563eb;
+    border-radius: 7px;
+}
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 2px;
+}
+QScrollBar::handle:vertical {
+    background: #cbd5e1;
+    border-radius: 5px;
+    min-height: 30px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #94a3b8;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+"""
 
 
 def _app_dir() -> Path:
@@ -118,6 +230,15 @@ class MainWindow(QWidget):
         self.resize(760, 600)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        header = QLabel("Office Tool 办公工具箱")
+        header.setObjectName("headerTitle")
+        layout.addWidget(header)
+        subtitle = QLabel("PDF · Word · 文件批处理 · 实用小工具")
+        subtitle.setObjectName("headerSubtitle")
+        layout.addWidget(subtitle)
 
         tabs = QTabWidget()
         tabs.addTab(self._wrap_scroll(self._build_tool_tab(PDF_TOOLS)), "PDF")
@@ -153,8 +274,11 @@ class MainWindow(QWidget):
     def _build_tool_tab(self, tools: list[ToolSpec]) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(9)
         for tool in tools:
             button = QPushButton(tool.label)
+            button.setCursor(Qt.PointingHandCursor)
             button.clicked.connect(lambda checked=False, spec=tool: self._run_tool(spec))
             layout.addWidget(button)
         layout.addStretch()
@@ -205,6 +329,8 @@ class MainWindow(QWidget):
 
 def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
+    app.setStyle("Fusion")
+    app.setStyleSheet(STYLE_SHEET)
     window = MainWindow()
     window.show()
     return app.exec()

@@ -66,22 +66,26 @@ def markdown_to_word(input_file, output_file):
         # Step 6: 保存 Word 文档
         doc.save(output_file)
         print(f"\n✅ 成功生成 Word 文件：{output_file}")
+        return True
     except Exception as e:
         try:
             messagebox.showerror("转换失败", str(e))
         except Exception:
             pass
         print(f"❌ 转换失败: {str(e)}")
+        return False
 
-def run_markdown_to_docx():
+def run_markdown_to_docx() -> str:
     input_md = select_markdown_file()
     if not input_md:
         print("未选择文件，程序已退出。")
-        return
+        return "已取消：Markdown 转 Word。"
 
     base_name = os.path.splitext(os.path.basename(input_md))[0]
     output_docx = os.path.join(os.path.dirname(input_md), base_name + ".docx")
-    markdown_to_word(input_md, output_docx)
+    if markdown_to_word(input_md, output_docx):
+        return f"转换完成 → {output_docx}"
+    return f"转换失败：{os.path.basename(input_md)}"
 
 
 if __name__ == "__main__":

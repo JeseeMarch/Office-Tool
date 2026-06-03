@@ -50,6 +50,40 @@ def test_pdf_text_watermark_font_size_accounts_for_render_zoom() -> None:
     assert _rendered_text_font_size(144) == 288
 
 
+def test_dialogs_default_font_size_is_72() -> None:
+    QApplication.instance() or QApplication([])
+
+    assert _WordWatermarkDialog().options().font_size == 72
+
+    word_pdf_dialog = _WordToImagePdfDialog()
+    word_pdf_dialog._single_text.setChecked(True)
+    assert word_pdf_dialog.options().font_size == 72
+
+    pdf_dialog = PdfToImagePdfDialog()
+    pdf_dialog._single_line.setChecked(True)
+    assert pdf_dialog.watermark_options().font_size == 72
+
+
+def test_multi_text_watermark_positions_scale_spacing_with_watermark_size() -> None:
+    from tools.word_watermark import (
+        _multi_text_watermark_positions,
+        _text_watermark_shape_size,
+        _vml_text_font_size,
+    )
+
+    text = "公司机密水印"
+    font_size = 72
+    width, height = _text_watermark_shape_size(text, _vml_text_font_size(font_size))
+    positions = _multi_text_watermark_positions(text, font_size)
+
+    # 中心水印存在；同行相邻列间距 = 2×宽（间距=1×宽），排间距 = 1.5×高。
+    assert (0, -70) in positions
+    x_step = max(120, int(width * 2.0))
+    y_step = max(80, int(height * 1.5))
+    assert any(left == x_step or left == -x_step for left, _ in positions)
+    assert any(top == -70 + y_step or top == -70 - y_step for _, top in positions)
+
+
 def test_dialogs_commit_typed_font_size_before_reading_options() -> None:
     QApplication.instance() or QApplication([])
 
