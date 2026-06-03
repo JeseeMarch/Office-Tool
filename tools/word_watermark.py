@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import math
 import os
 import sys
 from dataclasses import dataclass
@@ -106,17 +107,18 @@ def _text_watermark_xml(
 </w:p>"""
 
 
-def _text_watermarks_xml(text: str, font_size: int, positions: list[tuple[int, int]]) -> str:
-    paragraphs = "\n".join(
-        _text_watermark_xml(text, font_size, left, top, watermark_index)
+def _text_watermarks_xml(text: str, font_size: int, positions: list[tuple[float, float]]) -> str:
+    # 所有水印 shape 放进同一个段落的多个 run，避免每个水印各占一段而产生多余空行（回车符）。
+    runs = "\n".join(
+        _text_watermark_run_xml(text, font_size, left, top, watermark_index)
         for watermark_index, (left, top) in enumerate(positions)
     )
-    return f"""<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    return f"""<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
   xmlns:v="urn:schemas-microsoft-com:vml"
   xmlns:o="urn:schemas-microsoft-com:office:office"
   xmlns:w10="urn:schemas-microsoft-com:office:word">
-{paragraphs}
-</w:hdr>"""
+{runs}
+</w:p>"""
 
 
 def _text_watermark_run_xml(text: str, font_size: int, left: int, top: int, watermark_index: int) -> str:
@@ -133,11 +135,13 @@ def _text_watermark_shape_xml(text: str, font_size: int, left: int, top: int, wa
     vml_font_size = _vml_text_font_size(font_size)
     shape_width, shape_height = _text_watermark_shape_size(text, vml_font_size)
     spid = 2050 + watermark_index
+    # 用绝对定位（相对页面）：margin-left/top 即水印左上角在页面上的坐标。
+    # 注意不能再带 mso-position-horizontal/vertical:center，否则 margin 会被忽略、所有水印挤到正中重叠。
     return f"""<v:shape id="{watermark_id}" o:spid="_x0000_s{spid}" type="#_x0000_t136"
-        style="position:absolute;margin-left:{left}pt;margin-top:{top}pt;width:{shape_width}pt;height:{shape_height}pt;rotation:315;z-index:-251654144;mso-position-horizontal:center;mso-position-horizontal-relative:page;mso-position-vertical:center;mso-position-vertical-relative:page"
+        style="position:absolute;margin-left:{left}pt;margin-top:{top}pt;width:{shape_width}pt;height:{shape_height}pt;rotation:315;z-index:-251654144;mso-position-horizontal:absolute;mso-position-horizontal-relative:page;mso-position-vertical:absolute;mso-position-vertical-relative:page"
         fillcolor="#d8d8d8" stroked="f">
         <v:textpath on="t" string="{escaped_text}" style="font-family:'Times New Roman','Source Han Sans SC','Source Han Sans','思源黑体';mso-fareast-font-family:'Source Han Sans SC';font-size:{vml_font_size}pt"/>
-        <w10:wrap anchorx="margin" anchory="margin"/>
+        <w10:wrap anchorx="page" anchory="page"/>
       </v:shape>"""
 
 
@@ -149,9 +153,10 @@ def _single_line_text(text: str) -> str:
 def _text_watermark_shape_size(text: str, font_size: int) -> tuple[int, int]:
     cjk_count = sum(1 for char in text if _is_cjk(char))
     other_count = len(text) - cjk_count
-    text_width = cjk_count * font_size + int(other_count * font_size * 0.58)
-    width = max(120, int(text_width + font_size * 1.5))
-    height = max(45, int(font_size * 1.4))
+    height = max(45, int(round(font_size * 1.4)))
+    # WordArt(textpath) 会把文字拉伸填满 shape 框，故框的宽高比必须等于文字自然比例，
+    # 否则字会被压成瘦长。宽度 = 字数 × 框高（CJK 近似方形，西文按 0.58 折算）。
+    width = max(height, int(round(cjk_count * height + other_count * height * 0.58)))
     return width, height
 
 
@@ -173,27 +178,49 @@ def _is_cjk(char: str) -> bool:
     )
 
 
-def _multi_text_watermark_positions(text: str, font_size: int) -> list[tuple[int, int]]:
-    vml_font_size = _vml_text_font_size(font_size)
-    shape_width, shape_height = _text_watermark_shape_size(text, vml_font_size)
-    x_step = max(120, int(shape_width * 2.0))   # 同行内水印间距 = 水印长度的 1 倍
-    y_step = max(80, int(shape_height * 1.5))   # 行间距 1.5 倍
-    base_top = -70
-    positions = [(0, base_top)]
+def _centered_text_watermark_position(text: str, font_size: int, page_w_pt: float, page_h_pt: float) -> tuple[float, float]:
+    """单行水印：把 shape 居中放在页面正中（绝对坐标 = 页心 - 半个 shape）。"""
+    shape_width, shape_height = _text_watermark_shape_size(text, _vml_text_font_size(font_size))
+    return (round(page_w_pt / 2 - shape_width / 2, 1), round(page_h_pt / 2 - shape_height / 2, 1))
 
-    for column_index in (-1, 1):
-        left = column_index * x_step
-        if -420 <= left <= 420:
-            positions.append((left, base_top))
 
-    for row_offset in (-2, -1, 1, 2):
-        top = base_top + row_offset * y_step
-        start_left = -x_step // 2 if abs(row_offset) % 2 else 0
-        for column_index in range(-1, 2):
-            left = start_left + column_index * x_step
-            if -420 <= left <= 420:
-                positions.append((left, top))
+WATERMARK_ANGLE_DEG = 45  # 文字斜向角度；shape 用 rotation:315(=-45°) 渲染，整个阵列绕页心同角度旋转。
 
+
+def _multi_text_watermark_positions(
+    text: str, font_size: int, page_w_pt: float, page_h_pt: float
+) -> list[tuple[float, float]]:
+    """多行水印：以页心水印为中心、把整个网格阵列绕页心旋转 45°（整体旋转），返回各 shape 左上角的页面绝对坐标。
+
+    密集方向 step_x 平行于文字斜向（沿对角线连成行），稀疏方向 step_y 垂直于文字、取 3 倍行间距。
+    """
+    shape_width, shape_height = _text_watermark_shape_size(text, _vml_text_font_size(font_size))
+    rotated_extent = (shape_width + shape_height) * 0.70710678
+    unit = max(80.0, rotated_extent * 1.15)  # 一个水印的基本步长
+    step_x = unit * 2  # 列方向：两个水印之间留出一个水印的间距（中心距 = 2×基本步长）
+    step_y = unit * 2  # 行间距：由 3 倍基本步长改为 2 倍
+    center_x, center_y = page_w_pt / 2, page_h_pt / 2
+
+    # 与文字旋转同角度（rotation:315 → -45°），让网格随文字整体旋转。
+    angle = math.radians(-WATERMARK_ANGLE_DEG)
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    # 旋转后仍要盖满整页，用页面对角线半径决定网格范围。
+    reach = math.hypot(page_w_pt, page_h_pt) / 2
+    cols = int(reach // step_x) + 2
+    rows = int(reach // step_y) + 2
+    # 允许中心略微出界、但水印仍覆盖到页面的也保留（留半个 footprint 余量），保证边缘也铺满。
+    margin = rotated_extent / 2
+
+    positions: list[tuple[float, float]] = []
+    for row in range(-rows, rows + 1):
+        for col in range(-cols, cols + 1):
+            offset_x = col * step_x
+            offset_y = row * step_y
+            # 把网格点绕页心整体旋转
+            px = center_x + offset_x * cos_a - offset_y * sin_a
+            py = center_y + offset_x * sin_a + offset_y * cos_a
+            if -margin <= px <= page_w_pt + margin and -margin <= py <= page_h_pt + margin:
+                positions.append((round(px - shape_width / 2, 1), round(py - shape_height / 2, 1)))
     return positions
 
 
@@ -241,15 +268,16 @@ def add_watermark(doc: Document, options: WatermarkOptions) -> None:
         text = _single_line_text(options.text)
         if not text:
             raise ValueError("未输入水印文字。")
+        section = doc.sections[0]
+        page_w_pt = float(section.page_width or 0) / EMU_PER_PT or 595.0
+        page_h_pt = float(section.page_height or 0) / EMU_PER_PT or 842.0
         if options.kind == "single_text":
-            positions = [(0, -70)]
+            positions = [_centered_text_watermark_position(text, options.font_size, page_w_pt, page_h_pt)]
         else:
-            positions = _multi_text_watermark_positions(text, options.font_size)
+            positions = _multi_text_watermark_positions(text, options.font_size, page_w_pt, page_h_pt)
         for header in _iter_unique_headers(doc):
             _remove_existing_watermarks(header._element)
-            watermark_header = parse_xml(_text_watermarks_xml(text, options.font_size, positions))
-            for index, paragraph in enumerate(list(watermark_header)):
-                header._element.insert(index, paragraph)
+            header._element.insert(0, parse_xml(_text_watermarks_xml(text, options.font_size, positions)))
         return
 
     if options.kind == "image":

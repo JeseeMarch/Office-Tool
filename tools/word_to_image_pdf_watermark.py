@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import sys
 import tempfile
@@ -30,7 +31,11 @@ from PySide6.QtWidgets import (
 )
 
 
-TOOL_VERSION = "20260504-word-image-pdf-3x3-grid-watermark"
+TOOL_VERSION = "20260603-word-image-pdf-aligned-grid-watermark"
+
+# 页面渲染 DPI。水印字号会按 RENDER_DPI/72 放大，使 font_size 表示“页面磅值”，
+# 与 PDF 工具（RENDER_ZOOM=2.0，即 144dpi）保持同字号同物理大小。
+RENDER_DPI = 200
 
 
 @dataclass(frozen=True)
@@ -199,47 +204,26 @@ def _paste_tile(overlay: Image.Image, tile: Image.Image, x: int, y: int) -> None
 
 
 def _paste_centered_grid(overlay: Image.Image, tile: Image.Image, step_x: int, step_y: int) -> None:
+    # 以页面中心为基准，向四周铺满；所有行列严格对齐（不做半步错位），避免错行。
     step_x = max(1, step_x)
     step_y = max(1, step_y)
     center_x = (overlay.width - tile.width) // 2
     center_y = (overlay.height - tile.height) // 2
 
-    _paste_tile(overlay, tile, center_x, center_y)
+    start_x = center_x
+    while start_x - step_x > -tile.width:
+        start_x -= step_x
+    start_y = center_y
+    while start_y - step_y > -tile.height:
+        start_y -= step_y
 
-    x = center_x - step_x
-    while x > -tile.width:
-        _paste_tile(overlay, tile, x, center_y)
-        x -= step_x
-    x = center_x + step_x
-    while x < overlay.width:
-        _paste_tile(overlay, tile, x, center_y)
-        x += step_x
-
-    row_offset = -1
-    while center_y + row_offset * step_y > -tile.height:
-        y = center_y + row_offset * step_y
-        x = center_x + (step_x // 2 if abs(row_offset) % 2 else 0)
-        while x > -tile.width:
-            _paste_tile(overlay, tile, x, y)
-            x -= step_x
-        x = center_x + (step_x // 2 if abs(row_offset) % 2 else 0) + step_x
+    y = start_y
+    while y < overlay.height:
+        x = start_x
         while x < overlay.width:
             _paste_tile(overlay, tile, x, y)
             x += step_x
-        row_offset -= 1
-
-    row_offset = 1
-    while center_y + row_offset * step_y < overlay.height:
-        y = center_y + row_offset * step_y
-        x = center_x - (step_x // 2 if abs(row_offset) % 2 else 0)
-        while x > -tile.width:
-            _paste_tile(overlay, tile, x, y)
-            x -= step_x
-        x = center_x - (step_x // 2 if abs(row_offset) % 2 else 0) + step_x
-        while x < overlay.width:
-            _paste_tile(overlay, tile, x, y)
-            x += step_x
-        row_offset += 1
+        y += step_y
 
 
 def _add_text_watermark(
@@ -261,8 +245,12 @@ def _add_text_watermark(
     overlay = Image.new("RGBA", image.size, (255, 255, 255, 0))
     if kind == "multi_text":
         tile, text_width, text_height = _make_rotated_multiline_image(lines, fonts, font_size, opacity, angle)
-        # 同行内水印间距 = 水印长度的 1 倍 → 步长 = 2×文字宽；行间距 1.5 倍 → 步长 = 1.5×文字高。
-        _paste_centered_grid(overlay, tile, int(text_width * 2.0), int(text_height * 1.5))
+        # 旋转 angle 后，文字在水平/垂直方向的投影尺寸才是平铺间距的依据；
+        # 若仍按未旋转的文字宽/高计算，字数变多时步长失衡，水印会沿斜向首尾相接而“串行”。
+        cos_a, sin_a = abs(math.cos(math.radians(angle))), abs(math.sin(math.radians(angle)))
+        horiz_extent = text_width * cos_a + text_height * sin_a
+        vert_extent = text_width * sin_a + text_height * cos_a
+        _paste_centered_grid(overlay, tile, max(120, int(horiz_extent * 1.15)), max(80, int(vert_extent * 1.15)))
     else:
         line = lines[0]
         tile = _make_rotated_text_image(line, fonts, font_size, opacity, angle)
@@ -369,10 +357,12 @@ def word_to_image_pdf(input_file: str, options: ImagePdfOptions) -> str:
 
     try:
         _safe_convert(input_file, intermediate_pdf)
-        images = convert_from_path(intermediate_pdf)
+        images = convert_from_path(intermediate_pdf, dpi=RENDER_DPI)
         if options.watermark_kind in {"single_text", "multi_text"}:
+            # font_size 以页面磅值计；渲染图是 RENDER_DPI 像素密度，需同比放大字号。
+            scaled_font = max(1, round(options.font_size * RENDER_DPI / 72))
             images = [
-                _add_text_watermark(img, options.text, options.watermark_kind, options.font_size)
+                _add_text_watermark(img, options.text, options.watermark_kind, scaled_font)
                 for img in images
             ]
         elif options.watermark_kind == "image":

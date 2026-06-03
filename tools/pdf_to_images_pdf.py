@@ -304,55 +304,35 @@ def _paste_tile(watermark: Image.Image, tile: Image.Image, x: int, y: int) -> No
     watermark.alpha_composite(crop, (left, top))
 
 
-def _staggered_tile_positions(
+def _grid_tile_positions(
     tile_size: tuple[int, int],
     canvas_size: tuple[int, int],
     step_x: int,
     step_y: int,
 ) -> list[tuple[int, int]]:
+    # 以页面中心为基准，向四周铺满；所有行列严格对齐（不做半步错位），避免错行。
     tile_width, tile_height = tile_size
     canvas_width, canvas_height = canvas_size
     step_x = max(1, step_x)
     step_y = max(1, step_y)
     center_x = (canvas_width - tile_width) // 2
     center_y = (canvas_height - tile_height) // 2
-    positions = [(center_x, center_y)]
 
-    x = center_x - step_x
-    while x > -tile_width:
-        positions.append((x, center_y))
-        x -= step_x
-    x = center_x + step_x
-    while x < canvas_width:
-        positions.append((x, center_y))
-        x += step_x
+    start_x = center_x
+    while start_x - step_x > -tile_width:
+        start_x -= step_x
+    start_y = center_y
+    while start_y - step_y > -tile_height:
+        start_y -= step_y
 
-    row_offset = -1
-    while center_y + row_offset * step_y > -tile_height:
-        y = center_y + row_offset * step_y
-        x = center_x + (step_x // 2 if abs(row_offset) % 2 else 0)
-        while x > -tile_width:
-            positions.append((x, y))
-            x -= step_x
-        x = center_x + (step_x // 2 if abs(row_offset) % 2 else 0) + step_x
+    positions: list[tuple[int, int]] = []
+    y = start_y
+    while y < canvas_height:
+        x = start_x
         while x < canvas_width:
             positions.append((x, y))
             x += step_x
-        row_offset -= 1
-
-    row_offset = 1
-    while center_y + row_offset * step_y < canvas_height:
-        y = center_y + row_offset * step_y
-        x = center_x - (step_x // 2 if abs(row_offset) % 2 else 0)
-        while x > -tile_width:
-            positions.append((x, y))
-            x -= step_x
-        x = center_x - (step_x // 2 if abs(row_offset) % 2 else 0) + step_x
-        while x < canvas_width:
-            positions.append((x, y))
-            x += step_x
-        row_offset += 1
-
+        y += step_y
     return positions
 
 
@@ -377,11 +357,12 @@ def add_text_watermark(image: Image.Image, options: WatermarkOptions) -> Image.I
         watermark.alpha_composite(tile, (x, y))
         return Image.alpha_composite(image.convert("RGBA"), watermark).convert("RGB")
 
-    # 间距以水印文字本身的尺寸为准（不含留白/旋转放大）：
-    # 同行内水印间距 = 水印长度的 1 倍 → 步长 = 2×文字宽；行间距 1.5 倍 → 步长 = 1.5×文字高。
-    step_x = int(text_width * 2.0)
-    step_y = int(text_height * 1.5)
-    for x, y in _staggered_tile_positions(tile.size, image.size, step_x, step_y):
+    # 文字旋转 45° 后，其在水平/垂直方向的投影尺寸都约为 (宽+高)/√2。
+    # 平铺间距必须按旋转后的 footprint 计算，否则字数变多时步长会失衡，
+    # 水印会沿对角线首尾相接而“串行”。两个方向取相同步长、对齐成均匀网格（不错行）。
+    rotated_extent = (text_width + text_height) * 0.70710678
+    step = max(120, int(rotated_extent * 1.15))
+    for x, y in _grid_tile_positions(tile.size, image.size, step, step):
         _paste_tile(watermark, tile, x, y)
 
     return Image.alpha_composite(image.convert("RGBA"), watermark).convert("RGB")
