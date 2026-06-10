@@ -388,7 +388,7 @@ def add_image_watermark(image: Image.Image, image_path: str) -> Image.Image:
     return Image.alpha_composite(image.convert("RGBA"), watermark).convert("RGB")
 
 
-def render_page_to_image(page: fitz.Page, include_annotations: bool = False) -> Image.Image:
+def render_page_to_image(page: fitz.Page, include_annotations: bool = True) -> Image.Image:
     pix = page.get_pixmap(
         matrix=fitz.Matrix(RENDER_ZOOM, RENDER_ZOOM),
         alpha=False,
@@ -420,7 +420,7 @@ def convert_pdf_to_image_pdf(input_path: str, options: ProcessOptions | Watermar
             page = input_doc.load_page(page_index)
             if strip_pdf_watermark_artifacts_from_page(input_doc, page):
                 page = input_doc.reload_page(page)
-            image = render_page_to_image(page, include_annotations=False)
+            image = render_page_to_image(page, include_annotations=True)
             if options.watermark and options.watermark.kind == "text":
                 image = add_text_watermark(image, options.watermark)
             elif options.watermark and options.watermark.kind == "image":
