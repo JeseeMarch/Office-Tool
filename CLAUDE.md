@@ -9,7 +9,7 @@
 - 工具按 Tab 分四组：`PDF_TOOLS` / `WORD_TOOLS` / `FILE_TOOLS` / `OTHER_TOOLS`，每条是
   `ToolSpec(label, module_file, function_name, success_text)`。
 - 点按钮 → `load_tool()` 用 `importlib` **按文件路径**加载 `tools/<module_file>`（模块名带 mtime，每次都是新鲜加载，改完工具不用重启壳）→ 读可选 `TOOL_VERSION` → 调 `function_name`。
-- **入口函数契约**：若函数签名含 `progress_callback` 参数，壳会传入 `_update_progress(value, max)`；返回非空 `str` 会写进日志，否则用 `success_text`。异常会被壳捕获并弹框，工具内不用自己兜底崩溃。
+- **入口函数契约**：壳按参数名注入——签名含 `progress_callback` 则传入 `_update_progress(value, max)`；含 `log_callback` 则传入 `_log(text)`（执行途中往日志写字，如实时进度）。返回非空 `str` 会写进日志，否则用 `success_text`。异常会被壳捕获并弹框，工具内不用自己兜底崩溃。
 
 ### 加一个新工具（两步）
 1. 写 `tools/xxx.py`，暴露入口函数 `run_xxx(progress_callback=None) -> str`（或无参，见下）。可选加 `TOOL_VERSION = "..."`。

@@ -183,10 +183,10 @@ FILE_TOOLS = [
     ToolSpec("子文件夹内文件扁平复制到同一目录", "flatten_copy_from_subfolders.py", "run_flatten_copy", "已打开扁平复制。"),
     ToolSpec("批量替换文件名（子串）", "batch_rename_filenames.py", "run_batch_rename_filenames", "已打开批量重命名窗口。"),
     ToolSpec(
-        "OneDrive 触发按需下载（遍历读文件）",
+        "OneDrive 触发按需下载（整文件读取，带进度）",
         "onedrive_download_trigger.py",
         "run_onedrive_download_trigger",
-        "OneDrive 扫描已启动，请看控制台输出。",
+        "OneDrive 下载完成。",
     ),
 ]
 
@@ -311,10 +311,13 @@ class MainWindow(QWidget):
                 QMessageBox.warning(self, "调用失败", message)
                 return
 
-            if "progress_callback" in inspect.signature(fn).parameters:
-                result = fn(progress_callback=self._update_progress)
-            else:
-                result = fn()
+            params = inspect.signature(fn).parameters
+            kwargs = {}
+            if "progress_callback" in params:
+                kwargs["progress_callback"] = self._update_progress
+            if "log_callback" in params:
+                kwargs["log_callback"] = self._log
+            result = fn(**kwargs)
             if isinstance(result, str) and result.strip():
                 self._log(result)
             else:
