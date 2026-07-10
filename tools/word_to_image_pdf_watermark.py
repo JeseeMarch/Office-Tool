@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import glob
 import math
 import os
+import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -36,6 +38,39 @@ TOOL_VERSION = "20260603-word-image-pdf-aligned-grid-watermark"
 # 页面渲染 DPI。水印字号会按 RENDER_DPI/72 放大，使 font_size 表示“页面磅值”，
 # 与 PDF 工具（RENDER_ZOOM=2.0，即 144dpi）保持同字号同物理大小。
 RENDER_DPI = 200
+
+
+def _find_poppler_path() -> str | None:
+    """定位 Poppler 的 bin 目录。
+
+    convert_from_path 默认依赖进程 PATH，但刚装完 Poppler 时已运行的进程仍是旧
+    PATH，会报 "Is poppler installed and in PATH?"。这里在 PATH 之外再兜底扫几个
+    常见安装位置，找到就显式传给 convert_from_path，避免非重启不可。
+    找不到返回 None（交回默认的 PATH 查找）。
+    """
+    found = shutil.which("pdftoppm")
+    if found:
+        return os.path.dirname(found)
+
+    candidates = [
+        os.path.join(
+            os.environ.get("LOCALAPPDATA", ""),
+            r"Microsoft\WinGet\Packages",
+            "oschwartz10612.Poppler_*",
+            "poppler-*",
+            "Library",
+            "bin",
+        ),
+        r"C:\Program Files\poppler-*\Library\bin",
+        r"C:\Program Files\poppler-*\bin",
+        r"C:\poppler-*\Library\bin",
+        r"C:\poppler-*\bin",
+    ]
+    for pattern in candidates:
+        for path in sorted(glob.glob(pattern), reverse=True):
+            if os.path.isfile(os.path.join(path, "pdftoppm.exe")):
+                return path
+    return None
 
 
 @dataclass(frozen=True)
@@ -357,7 +392,10 @@ def word_to_image_pdf(input_file: str, options: ImagePdfOptions) -> str:
 
     try:
         _safe_convert(input_file, intermediate_pdf)
-        images = convert_from_path(intermediate_pdf, dpi=RENDER_DPI)
+        poppler_path = _find_poppler_path()
+        images = convert_from_path(
+            intermediate_pdf, dpi=RENDER_DPI, poppler_path=poppler_path
+        )
         if options.watermark_kind in {"single_text", "multi_text"}:
             # font_size 以页面磅值计；渲染图是 RENDER_DPI 像素密度，需同比放大字号。
             scaled_font = max(1, round(options.font_size * RENDER_DPI / 72))
